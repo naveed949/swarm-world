@@ -1,0 +1,1 @@
+{"name":"@naveed949/swarm-world","version":"0.1.0","private":true,"type":"module","scripts":{"test":"node --test","experiment":"node src/cli.js"},"engines":{"node":">=20"}}
