@@ -1,0 +1,7 @@
+placements:
+  - { facility: WASH, position: [0.40, 0.48] }
+  - { facility: DRY, position: [0.47, 0.45] }
+  - { facility: CROSSLINK, position: [0.55, 0.45] }
+  - { facility: FERMENT, position: [0.61, 0.49] }
+  - { facility: ALIGN, position: [0.48, 0.58] }
+  - { facility: MINERALIZE, position: [0.57, 0.58] }

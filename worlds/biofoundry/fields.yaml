@@ -1,0 +1,7 @@
+initial:
+  temperature: 0.50
+  water: 0.55
+  stability: 0.70
+  contamination: 0.02
+  solar: 0.60
+  nutrients: 0.50

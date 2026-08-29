@@ -1,0 +1,9 @@
+format_version: 1
+id: biofoundry
+name: BioFoundry
+version: 1.0.0
+documents:
+  geometry: geometry.yaml
+  resources: resources.yaml
+  facilities: facilities.yaml
+  fields: fields.yaml
