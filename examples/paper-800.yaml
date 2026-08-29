@@ -1,0 +1,24 @@
+seed: 3201
+population: 50
+ticks: 800
+macroturnInterval: 50
+planLimit: 12
+condition: full
+cognition: pi
+model:
+  provider: openai
+  id: gpt-5.6-luna
+  temperature: 0.7
+  reasoning: low
+world:
+  width: 72
+  height: 54
+  observationRadius: 4
+  inventoryLimit: 8
+  disturbanceInterval: 64
+  disturbanceIntensity: 0.5
+  scenarioPackage: ../worlds/biofoundry/scenario.yaml
+evaluation:
+  checkpoints: [800]
+  ticks: 288
+  seeds: [9201, 9202, 9203, 9204, 9205, 9206, 9207, 9208]

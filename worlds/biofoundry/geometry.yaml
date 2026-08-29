@@ -1,0 +1,8 @@
+base_terrain: PLAIN
+features:
+  - terrain: DEEP_WATER
+    shape: { kind: rectangle, bounds: [0.0, 0.0, 0.06, 1.0] }
+  - terrain: TIDAL_FLAT
+    shape: { kind: rectangle, bounds: [0.06, 0.0, 0.14, 1.0] }
+  - terrain: WORKSPACE
+    shape: { kind: ellipse, center: [0.52, 0.52], radius: [0.16, 0.14] }

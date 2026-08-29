@@ -1,0 +1,65 @@
+deposits:
+  - {
+      resource: CELLULOSE,
+      shape: { kind: ellipse, center: [0.20, 0.22], radius: [0.11, 0.10] },
+      capacity: 3.0,
+      capacity_variation: 0.15,
+      initial_fill: [0.55, 0.9],
+      renewal: 0.002,
+    }
+  - {
+      resource: CHITIN,
+      shape: { kind: ellipse, center: [0.78, 0.18], radius: [0.10, 0.09] },
+      capacity: 3.0,
+      capacity_variation: 0.15,
+      initial_fill: [0.55, 0.9],
+      renewal: 0.002,
+    }
+  - {
+      resource: MINERAL,
+      shape: { kind: ellipse, center: [0.84, 0.72], radius: [0.10, 0.12] },
+      capacity: 3.0,
+      capacity_variation: 0.15,
+      initial_fill: [0.55, 0.9],
+      renewal: 0.001,
+    }
+  - {
+      resource: FUNGAL,
+      shape: { kind: ellipse, center: [0.24, 0.76], radius: [0.12, 0.11] },
+      capacity: 3.0,
+      capacity_variation: 0.15,
+      initial_fill: [0.55, 0.9],
+      renewal: 0.003,
+    }
+  - {
+      resource: CATALYST,
+      shape: { kind: circle, center: [0.50, 0.18], radius: 0.07 },
+      capacity: 2.0,
+      capacity_variation: 0.12,
+      initial_fill: [0.55, 0.85],
+      renewal: 0.001,
+    }
+  - {
+      resource: KELP,
+      shape: { kind: ellipse, center: [0.11, 0.50], radius: [0.045, 0.16] },
+      capacity: 3.0,
+      capacity_variation: 0.15,
+      initial_fill: [0.55, 0.9],
+      renewal: 0.004,
+    }
+  - {
+      resource: SHELL,
+      shape: { kind: ellipse, center: [0.68, 0.84], radius: [0.08, 0.07] },
+      capacity: 2.5,
+      capacity_variation: 0.12,
+      initial_fill: [0.55, 0.9],
+      renewal: 0.001,
+    }
+  - {
+      resource: LIGNIN,
+      shape: { kind: ellipse, center: [0.48, 0.72], radius: [0.08, 0.10] },
+      capacity: 3.0,
+      capacity_variation: 0.15,
+      initial_fill: [0.55, 0.9],
+      renewal: 0.002,
+    }
