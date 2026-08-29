@@ -11,7 +11,7 @@ This is a simulation engine, not a group-chat demo. Initially homogeneous agents
 - Nested, population-independent initial positions and staggered macroturn phases.
 - Local semantic observations, sparse empirical maps, 64-record private memory, research-state updates, and bounded action queues with at most one attempted action per agent per tick.
 - Strict proposal/consequence separation. Agent text cannot alter physics, inventory, measurements, service, provenance, or evaluation.
-- Grounded harvesting, shared physical depots, typed material recipes, private batches, deterministic tests, construction, repair, dismantling, and closed artifact fluxes.
+- Grounded harvesting, conserved shared-depot deposit/withdrawal, typed recipes processed in declared order at each physical workstation, private pending microbatches, deterministic tests, construction, repair, dismantling, and closed artifact fluxes.
 - A 16-register, 64-instruction maximum artifact VM. It has sensors, arithmetic, comparisons, and capability-scoped actuators, but no loops, jumps, imports, allocation, strings-as-code, network, files, shell, or dynamic execution.
 - Content-addressed programs, exact parent/child lineage, empirical access rules, changed-instruction requirements for forks, and permanent installation history.
 - Full-culture, no-communication, no-explicit-culture, and independent-search treatment contracts. Disabled mechanisms are removed from execution, not hidden only in the prompt.

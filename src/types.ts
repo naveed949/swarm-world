@@ -60,6 +60,15 @@ export interface MaterialBatch {
   evidenceIds: string[];
 }
 
+export interface PendingBatch {
+  id: string;
+  ownerId: string;
+  recipe: Recipe;
+  nextOperationIndex: number;
+  contributors: string[];
+  evidenceIds: string[];
+}
+
 export type Sensor =
   | FieldId
   | "health"
@@ -152,6 +161,7 @@ export interface AgentState {
   phase: number;
   inventory: Partial<Record<ResourceId, number>>;
   batches: MaterialBatch[];
+  pendingBatches: PendingBatch[];
   queue: Action[];
   research: ResearchState;
   memory: MemoryRecord[];
@@ -187,7 +197,9 @@ export type Action =
   | { type: "INSPECT"; target: "CELL" | "ARTIFACT"; artifactId?: string }
   | { type: "HARVEST"; resource: ResourceId; amount: number }
   | { type: "DEPOSIT"; resource: ResourceId; amount: number }
-  | { type: "PROCESS"; recipe: Recipe }
+  | { type: "WITHDRAW"; resource: ResourceId; amount: number }
+  | { type: "FORMULATE"; recipe: Recipe }
+  | { type: "PROCESS"; pendingBatchId: string }
   | { type: "TEST"; batchId: string }
   | { type: "CONSTRUCT"; batchId: string; spec: ArtifactSpec }
   | {
@@ -227,6 +239,7 @@ export interface LocalObservation {
     position: Vec2;
     inventory: AgentState["inventory"];
     batches: MaterialBatch[];
+    pendingBatches: PendingBatch[];
   };
   cells: Array<{
     position: Vec2;

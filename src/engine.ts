@@ -1,7 +1,7 @@
 import { capabilities } from "./config.js";
 import { InvalidPlanError, type Cognition } from "./cognition.js";
 import { sha256 } from "./hash.js";
-import { fabricate } from "./materials.js";
+import { beginProcessing, finishProcessing } from "./materials.js";
 import { Trace } from "./trace.js";
 import type {
   Action,
@@ -73,6 +73,7 @@ export class Simulator {
       phase: i % config.macroturnInterval,
       inventory: {},
       batches: [],
+      pendingBatches: [],
       queue: [],
       research: emptyResearch(),
       memory: [],
@@ -355,14 +356,37 @@ export class Simulator {
           this.accept(agent, action, { amount });
           return;
         }
-        case "PROCESS": {
-          const facility =
-            this.world.facilities[this.world.index(agent.position)];
-          if (!facility || !action.recipe.operations.includes(facility))
+        case "WITHDRAW": {
+          const depot = this.world.depots[this.world.index(agent.position)]!;
+          const inventoryMass = Object.values(agent.inventory).reduce(
+            (total, amount) => total + (amount ?? 0),
+            0,
+          );
+          const amount = Math.min(
+            Math.max(0, action.amount),
+            depot[action.resource] ?? 0,
+            this.config.world.inventoryLimit - inventoryMass,
+          );
+          if (amount <= 0)
             return this.reject(
               agent,
               action,
-              "Processing requires a locally matching facility",
+              "No deposited resource or inventory capacity",
+            );
+          depot[action.resource] = (depot[action.resource] ?? 0) - amount;
+          agent.inventory[action.resource] =
+            (agent.inventory[action.resource] ?? 0) + amount;
+          this.accept(agent, action, { amount });
+          return;
+        }
+        case "FORMULATE": {
+          const facility =
+            this.world.facilities[this.world.index(agent.position)];
+          if (!facility || action.recipe.operations[0] !== facility)
+            return this.reject(
+              agent,
+              action,
+              "Formulation requires the recipe's first operation facility",
             );
           const evidence = agent.memory
             .filter(
@@ -370,12 +394,80 @@ export class Simulator {
             )
             .slice(-8)
             .map((m) => m.id);
-          const batch = fabricate(agent, action.recipe, evidence);
+          const pending = beginProcessing(agent, action.recipe, evidence);
+          if (pending.nextOperationIndex >= pending.recipe.operations.length) {
+            const batch = finishProcessing(agent, pending);
+            agent.batches.push(batch);
+            this.accept(
+              agent,
+              action,
+              {
+                batchId: batch.id,
+                recipe: batch.recipe,
+                completedOperations: batch.recipe.operations,
+              },
+              batch.id,
+            );
+            return;
+          }
+          agent.pendingBatches.push(pending);
+          this.accept(
+            agent,
+            action,
+            {
+              pendingBatchId: pending.id,
+              completedOperation: facility,
+              nextOperation:
+                pending.recipe.operations[pending.nextOperationIndex],
+            },
+            pending.id,
+          );
+          return;
+        }
+        case "PROCESS": {
+          const pending = agent.pendingBatches.find(
+            (batch) => batch.id === action.pendingBatchId,
+          );
+          if (!pending)
+            return this.reject(agent, action, "Pending batch not owned");
+          const facility =
+            this.world.facilities[this.world.index(agent.position)];
+          const required =
+            pending.recipe.operations[pending.nextOperationIndex];
+          if (!facility || facility !== required)
+            return this.reject(
+              agent,
+              action,
+              `Ordered processing requires ${required ?? "no further operation"}`,
+            );
+          pending.nextOperationIndex++;
+          if (pending.nextOperationIndex < pending.recipe.operations.length) {
+            this.accept(
+              agent,
+              action,
+              {
+                pendingBatchId: pending.id,
+                completedOperation: facility,
+                nextOperation:
+                  pending.recipe.operations[pending.nextOperationIndex],
+              },
+              pending.id,
+            );
+            return;
+          }
+          const batch = finishProcessing(agent, pending);
+          agent.pendingBatches = agent.pendingBatches.filter(
+            (candidate) => candidate.id !== pending.id,
+          );
           agent.batches.push(batch);
           this.accept(
             agent,
             action,
-            { batchId: batch.id, recipe: batch.recipe },
+            {
+              batchId: batch.id,
+              pendingBatchId: pending.id,
+              completedOperations: batch.recipe.operations,
+            },
             batch.id,
           );
           return;

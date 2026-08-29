@@ -342,6 +342,7 @@ export class World {
         position: agent.position,
         inventory: { ...agent.inventory },
         batches: structuredClone(agent.batches),
+        pendingBatches: structuredClone(agent.pendingBatches),
       },
       cells,
       agents: agents
@@ -365,6 +366,8 @@ export class World {
         "INSPECT",
         "HARVEST",
         "DEPOSIT",
+        "WITHDRAW",
+        "FORMULATE",
         "PROCESS",
         "TEST",
         "CONSTRUCT",

@@ -164,7 +164,15 @@ const actionSchema = z.discriminatedUnion("type", [
       amount: z.number().positive(),
     })
     .strict(),
-  z.object({ type: z.literal("PROCESS"), recipe: recipeSchema }).strict(),
+  z
+    .object({
+      type: z.literal("WITHDRAW"),
+      resource: resourceSchema,
+      amount: z.number().positive(),
+    })
+    .strict(),
+  z.object({ type: z.literal("FORMULATE"), recipe: recipeSchema }).strict(),
+  z.object({ type: z.literal("PROCESS"), pendingBatchId: z.string() }).strict(),
   z.object({ type: z.literal("TEST"), batchId: z.string() }).strict(),
   z
     .object({
@@ -383,11 +391,24 @@ export class HeuristicCognition implements Cognition {
     );
     const tested = agent.batches.find((b) => b.tested);
     const untested = agent.batches.find((b) => !b.tested);
+    const pending = agent.pendingBatches[0];
     const ownArtifact = observation.artifacts.find(
       (a) => a.creatorId === agent.id && !a.programId,
     );
     let actions: Action[] = [];
-    if (ownArtifact)
+    if (pending) {
+      const required = pending.recipe.operations[pending.nextOperationIndex];
+      if (here?.facility === required)
+        actions = [{ type: "PROCESS", pendingBatchId: pending.id }];
+      else {
+        const target = observation.cells.find(
+          (cell) => cell.facility === required,
+        );
+        actions = target
+          ? pathTo(agent.position, target.position)
+          : [{ type: "WAIT" }];
+      }
+    } else if (ownArtifact)
       actions = [
         {
           type: "INSTALL_PROGRAM",
@@ -432,7 +453,7 @@ export class HeuristicCognition implements Cognition {
           alignment: 0.55,
           crosslinking: 0.5,
         };
-        actions = [{ type: "PROCESS", recipe }];
+        actions = [{ type: "FORMULATE", recipe }];
       } else if (here?.resource && here.resource.mass > 0.1)
         actions = [
           { type: "HARVEST", resource: here.resource.id, amount: 0.4 },

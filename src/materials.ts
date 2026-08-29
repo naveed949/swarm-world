@@ -4,6 +4,7 @@ import type {
   FacilityId,
   MaterialBatch,
   MaterialProperties,
+  PendingBatch,
   Recipe,
   ResourceId,
 } from "./types.js";
@@ -109,11 +110,11 @@ export function validateRecipe(recipe: Recipe): void {
       throw new Error("Recipe controls must be normalized");
 }
 
-export function fabricate(
+export function beginProcessing(
   agent: AgentState,
   recipe: Recipe,
   evidenceIds: string[],
-): MaterialBatch {
+): PendingBatch {
   validateRecipe(recipe);
   for (const [resource, amount] of Object.entries(recipe.inputs) as Array<
     [ResourceId, number]
@@ -125,6 +126,22 @@ export function fabricate(
     [ResourceId, number]
   >)
     agent.inventory[resource] = (agent.inventory[resource] ?? 0) - amount;
+  const id = `pending_${sha256({ owner: agent.id, recipe, index: agent.pendingBatches.length + agent.batches.length }).slice(0, 16)}`;
+  return {
+    id,
+    ownerId: agent.id,
+    recipe: structuredClone(recipe),
+    nextOperationIndex: 1,
+    contributors: [agent.id],
+    evidenceIds,
+  };
+}
+
+export function finishProcessing(
+  agent: AgentState,
+  pending: PendingBatch,
+): MaterialBatch {
+  const { recipe } = pending;
   const total = Object.values(recipe.inputs).reduce((a, b) => a + (b ?? 0), 0);
   const properties = Object.fromEntries(
     Object.keys(vectors.CELLULOSE).map((key) => {
@@ -154,7 +171,7 @@ export function fabricate(
   const quality = clip(
     0.35 + 0.08 * new Set(recipe.operations).size + 0.2 * Math.min(total, 1),
   );
-  const id = `batch_${sha256({ owner: agent.id, recipe, index: agent.batches.length }).slice(0, 16)}`;
+  const id = `batch_${sha256({ pendingId: pending.id, recipe }).slice(0, 16)}`;
   return {
     id,
     ownerId: agent.id,
@@ -162,8 +179,8 @@ export function fabricate(
     properties,
     quality,
     tested: false,
-    contributors: [agent.id],
-    evidenceIds,
+    contributors: [...pending.contributors],
+    evidenceIds: [...pending.evidenceIds],
   };
 }
 
