@@ -1,6 +1,6 @@
 seed: 3201
 population: 2
-ticks: 20
+ticks: 160
 macroturnInterval: 10
 planLimit: 6
 condition: full
@@ -19,6 +19,6 @@ world:
   disturbanceIntensity: 0.5
   scenarioPackage: ../worlds/biofoundry/scenario.yaml
 evaluation:
-  checkpoints: [20]
-  ticks: 24
+  checkpoints: [80, 160]
+  ticks: 160
   seeds: [9201]
