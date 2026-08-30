@@ -31,6 +31,26 @@ export class RepositoryTrace {
     return event;
   }
 
+  appendFacilityCompleted(
+    actorId: string,
+    evidenceId: string,
+    data: {
+      facilityId: string;
+      success: boolean;
+      exitCode: number;
+      outputDigest: string;
+      output: string;
+    },
+  ): RepositoryTraceEvent {
+    return this.append(
+      "facility_completed",
+      data.success,
+      actorId,
+      evidenceId,
+      data,
+    );
+  }
+
   hash(): string {
     return this.events.at(-1)?.digest ?? "genesis";
   }

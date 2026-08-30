@@ -1157,6 +1157,13 @@ export class RepositoryEnvironment implements Environment<
       },
       result.outputDigest,
     );
+    this.trace.appendFacilityCompleted(agent.id, evidence.id, {
+      facilityId,
+      success: result.success,
+      exitCode: result.exitCode,
+      outputDigest: result.outputDigest,
+      output: result.output,
+    });
     if (result.success) recipe.checks.set(facilityId, evidence.id);
     else {
       const diagnostic = this.node(
@@ -1578,7 +1585,9 @@ export class RepositoryEnvironment implements Environment<
     const rows = output ? output.split("\n") : [];
     for (const path of await this.untrackedPaths(worktree)) {
       const content = await readFile(resolve(worktree, path), "utf8");
-      rows.push(`${content === "" ? 0 : content.split("\n").length}\t0\t${path}`);
+      rows.push(
+        `${content === "" ? 0 : content.split("\n").length}\t0\t${path}`,
+      );
     }
     if (!rows.length) return { files: 0, lines: 0 };
     return {
