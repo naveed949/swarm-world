@@ -91,6 +91,31 @@ describe("RepositoryEnvironment", () => {
     );
   });
 
+  it("runs a deterministic read-only multi-agent survey", async () => {
+    const environment = fixture();
+    const result = await runRepositoryExperiment(
+      {
+        seed: 3201,
+        population: 2,
+        ticks: 3,
+        macroturnInterval: 1,
+        planLimit: 1,
+        condition: "full",
+        planner: "survey",
+        surveyQueries: ["export"],
+        environment,
+      },
+      mkdtempSync(join(tmpdir(), "swarm-world-survey-")),
+    );
+    const trace = readFileSync(result.tracePath, "utf8");
+
+    expect(result.summary.outcome).toBe("no eligible artifact");
+    expect(result.summary.evaluation.hardGatesPassed).toBe(false);
+    expect(trace).toContain('"type":"CLAIM_TASK"');
+    expect(trace).toContain('"type":"INSPECT"');
+    expect(trace).toContain('"type":"SEARCH"');
+  });
+
   it("allows focus movement only across visible graph relationships", async () => {
     const environment = await RepositoryEnvironment.create(fixture());
     const agent = environment.createAgent("agent-1");

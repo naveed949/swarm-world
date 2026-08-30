@@ -17,6 +17,9 @@
     "format": "prettier --check .",
     "format:fix": "prettier --write .",
     "demo": "npm run build && node dist/cli.js run --config examples/minimal.yaml",
+    "docker:build": "docker build --file docker/repository-runner.Dockerfile --tag swarm-world-repository:local .",
+    "example:sandcastle:prepare": "sh scripts/prepare-sandcastle-example.sh",
+    "example:sandcastle": "sh scripts/run-repository-container.sh .examples/sandcastle examples/repository/sandcastle.yaml runs/sandcastle-container",
     "verify": "npm run check && npm run lint && npm run test && npm run build"
   },
   "engines": {

@@ -32,13 +32,37 @@ const waitPlanner: EnvironmentPlanner<RepositoryObservation, RepositoryAction> =
     plan: async () => [{ type: "WAIT" }],
   };
 
+function surveyPlanner(
+  config: RepositoryRunConfig,
+): EnvironmentPlanner<RepositoryObservation, RepositoryAction> {
+  return {
+    plan: async ({ agentId, tick, observation }) => {
+      const agentIndex = Number(agentId.slice("agent_".length));
+      if (tick === 0 && agentIndex === 0)
+        return [{ type: "CLAIM_TASK", taskId: config.environment.task.id }];
+      if (tick === 1) {
+        const inspectable = observation.nodes
+          .filter((node) => node.path)
+          .sort((a, b) => a.id.localeCompare(b.id));
+        const node = inspectable[agentIndex % Math.max(inspectable.length, 1)];
+        return node
+          ? [{ type: "INSPECT", nodeId: node.id }]
+          : [{ type: "WAIT" }];
+      }
+      const queries = config.surveyQueries ?? [];
+      const query = queries[(tick + agentIndex) % Math.max(queries.length, 1)];
+      return query ? [{ type: "SEARCH", query }] : [{ type: "WAIT" }];
+    },
+  };
+}
+
 export async function runRepositoryExperiment(
   config: RepositoryRunConfig,
   outputDir = "runs",
   planner: EnvironmentPlanner<
     RepositoryObservation,
     RepositoryAction
-  > = waitPlanner,
+  > = config.planner === "survey" ? surveyPlanner(config) : waitPlanner,
 ): Promise<RepositoryRunResult> {
   const ids = Array.from(
     { length: config.population },

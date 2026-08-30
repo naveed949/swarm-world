@@ -85,6 +85,28 @@ Repository runs are constructed through `RepositoryEnvironment.create`. They are
 
 Facilities are operator configuration, not agent-selected commands. Each facility uses an absolute executable, fixed arguments, a timeout, bounded output, an explicit environment, and a mandatory/optional verification classification. Repository agents receive only the action vocabulary exposed by the adapter; arbitrary shell execution, dependency installation, network access, base-checkout mutation, pushes, merges, deployments, and tracker changes are not available.
 
+### Containerized Sandcastle survey
+
+The retained example surveys the real `naveed949/sandcastle` repository at pinned commit `b03b295836bdc7ce67846814f02a80705c162122`. It is a read-only two-agent run: agents claim, inspect, and search repository nodes, then a fixed Node facility checks the package and isolation sources. No patch is eligible by design.
+
+```bash
+npm run example:sandcastle:prepare
+npm run example:sandcastle
+```
+
+The first command downloads the pinned source to the ignored `.examples/` directory. The second builds the runner image, mounts that checkout read-only, copies it to ephemeral container storage, disables runtime networking, drops Linux capabilities, enables `no-new-privileges`, makes the container root filesystem read-only, and applies CPU, memory, and process limits. Only `runs/sandcastle-container/` is retained on the host.
+
+To survey another already-local repository, use a config with an exact commit and run:
+
+```bash
+sh scripts/run-repository-container.sh \
+  /absolute/path/to/repository \
+  /absolute/path/to/repository-config.yaml \
+  runs/repository-container
+```
+
+Do not mount credentials or the Docker socket into this runner. Docker narrows the blast radius but does not make untrusted code risk-free; use a disposable Docker context or VM for stronger host isolation.
+
 The public repository lifecycle is:
 
 1. Create an agent and observe its stable, bounded graph neighborhood.

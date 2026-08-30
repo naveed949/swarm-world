@@ -16,6 +16,8 @@ export interface RepositoryRunConfig {
   macroturnInterval: number;
   planLimit: number;
   condition: Condition;
+  planner?: "wait" | "survey";
+  surveyQueries?: string[];
   environment: RepositoryEnvironmentConfig;
 }
 
@@ -58,6 +60,8 @@ const repositoryRunSchema = z.object({
   condition: z
     .enum(["full", "no-communication", "no-explicit-culture", "independent"])
     .default("full"),
+  planner: z.enum(["wait", "survey"]).default("wait"),
+  surveyQueries: z.array(z.string().min(1).max(256)).default([]),
   environment: z.object({
     type: z.literal("repository"),
     root: z.string().min(1),
@@ -108,6 +112,8 @@ export async function loadRunConfig(path: string): Promise<RunConfig> {
       macroturnInterval: parsed.macroturnInterval,
       planLimit: parsed.planLimit,
       condition: parsed.condition,
+      planner: parsed.planner,
+      surveyQueries: parsed.surveyQueries,
       environment: {
         ...environment,
         root: resolve(dirname(path), environment.root),

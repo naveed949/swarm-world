@@ -1,0 +1,7 @@
+.git
+.examples
+coverage
+dist
+node_modules
+runs
+*.log
