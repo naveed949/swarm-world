@@ -6,7 +6,7 @@ planLimit: 12
 condition: full
 cognition: pi
 model:
-  provider: openai
+  provider: openai-codex
   id: gpt-5.6-luna
   temperature: 0.7
   reasoning: low

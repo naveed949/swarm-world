@@ -34,10 +34,16 @@ The demo uses deterministic heuristic cognition and writes a hashed run under `r
 Run LLM agents through Pi:
 
 ```bash
-export OPENAI_API_KEY=...
+pi auth check --provider openai-codex
 npm run build
-node dist/cli.js run --config examples/paper-800.yaml
+node dist/cli.js run --config examples/minimal-pi.yaml
 ```
+
+Pi cognition uses the canonical `ModelRuntime`, which loads stored credentials
+from `~/.pi/agent/auth.json`. Run `pi` and use `/login` with the
+`openai-codex` provider first if the authentication check fails. An
+`OPENAI_API_KEY` is only needed when a configuration explicitly selects the
+separate `openai` API provider.
 
 Run the mechanism-resolved population study matrix:
 

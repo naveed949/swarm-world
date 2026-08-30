@@ -1,6 +1,6 @@
 import { Agent } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
-import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
 import type {
   Action,
@@ -109,7 +109,7 @@ const instructionSchema = z
 const recipeSchema = z
   .object({
     inputs: z
-      .record(resourceSchema, z.number().positive())
+      .partialRecord(resourceSchema, z.number().positive())
       .refine((v) => Object.keys(v).length > 0),
     operations: z.array(facilitySchema).min(1).max(8),
     hydration: z.number().min(0).max(1),
@@ -134,15 +134,23 @@ const specSchema = z
       .strict(),
   })
   .strict();
-const actionSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("WAIT") }).strict(),
+const moveSchema = z.union([
   z
-    .object({
-      type: z.literal("MOVE"),
-      dx: z.union([z.literal(-1), z.literal(0), z.literal(1)]),
-      dy: z.union([z.literal(-1), z.literal(0), z.literal(1)]),
-    })
+    .object({ type: z.literal("MOVE"), dx: z.literal(-1), dy: z.literal(0) })
     .strict(),
+  z
+    .object({ type: z.literal("MOVE"), dx: z.literal(1), dy: z.literal(0) })
+    .strict(),
+  z
+    .object({ type: z.literal("MOVE"), dx: z.literal(0), dy: z.literal(-1) })
+    .strict(),
+  z
+    .object({ type: z.literal("MOVE"), dx: z.literal(0), dy: z.literal(1) })
+    .strict(),
+]);
+const actionSchema = z.union([
+  z.object({ type: z.literal("WAIT") }).strict(),
+  moveSchema,
   z
     .object({
       type: z.literal("INSPECT"),
@@ -248,22 +256,162 @@ const planSchema = z
   .object({ research: researchSchema, actions: z.array(actionSchema).max(12) })
   .strict();
 
+export function parseAgentPlan(value: unknown): AgentPlan {
+  return planSchema.parse(value) as AgentPlan;
+}
+
+export function planToolParameters() {
+  return Type.Unsafe<AgentPlan>(
+    structuredClone(z.toJSONSchema(planSchema)) as Record<string, unknown>,
+  );
+}
+
+const starterProgram = [
+  { op: "SENSOR", dst: 0, sensor: "water" },
+  { op: "CONST", dst: 1, value: 0.55 },
+  { op: "LT", dst: 2, a: 0, b: 1 },
+  { op: "CONST", dst: 3, value: 0.04 },
+  { op: "MUL", dst: 4, a: 2, b: 3 },
+  { op: "ACT", a: 4, actuator: "COLLECT_WATER" },
+  { op: "SENSOR", dst: 5, sensor: "contamination" },
+  { op: "MUL", dst: 6, a: 5, b: 3 },
+  { op: "ACT", a: 6, actuator: "REMEDIATE" },
+] as import("./types.js").Instruction[];
+
+export const PI_ACTION_GUIDANCE = `Action preconditions:
+- observation.self and materialActionOptions are current authority. Research state and memory are historical and may be stale. Use only IDs listed for the matching action type in materialActionOptions.
+- FORMULATE only while standing at recipe.operations[0], and FORMULATE completes recipe.operations[0]. Recipe inputs must be a non-empty subset of resources currently possessed. Any possessed resource may be used by itself; no structural feedstock is required.
+- For a pending batch, nextOperation is the facility that must be visited next. Move there before PROCESS; do not process again at an already completed facility.
+- PROCESS only an owned pending batch while standing at its nextOperation facility.
+- TEST only an owned completed batch.
+- CONSTRUCT only an owned tested batch.
+- INSTALL_PROGRAM on a local active artifact you created or contributed to when it has no programId. When materialActionOptions supplies instructions, use those exact known-valid instructions. After CONSTRUCT, prioritize installing the controller on the next observation.
+Once material is possessed and a facility is visible, prioritize a small formulation over repeated harvesting or inspection.
+Plan actions execute sequentially. IDs and consequences created by an action are unavailable until a later observation, so never reference a future ID in the same plan.`;
+
+export function piObservationForModel(observation: LocalObservation) {
+  const currentFacility = observation.cells.find(
+    (cell) =>
+      cell.position.x === observation.self.position.x &&
+      cell.position.y === observation.self.position.y,
+  )?.facility;
+  const materialActionOptions: Array<Record<string, unknown>> = [];
+  for (const batch of observation.self.pendingBatches) {
+    const requiredFacility =
+      batch.recipe.operations[batch.nextOperationIndex] ?? null;
+    materialActionOptions.push({
+      type: "PROCESS",
+      pendingBatchId: batch.id,
+      requiredFacility,
+      ready: requiredFacility !== null && currentFacility === requiredFacility,
+    });
+  }
+  for (const batch of observation.self.batches)
+    materialActionOptions.push(
+      batch.tested
+        ? { type: "CONSTRUCT", batchId: batch.id, ready: true }
+        : { type: "TEST", batchId: batch.id, ready: true },
+    );
+  for (const artifact of observation.artifacts) {
+    const local =
+      Math.hypot(
+        artifact.position.x - observation.self.position.x,
+        artifact.position.y - observation.self.position.y,
+      ) <= 1.5;
+    const hasAccess =
+      artifact.creatorId === observation.self.id ||
+      artifact.contributors.includes(observation.self.id);
+    if (artifact.active && !artifact.programId && hasAccess)
+      materialActionOptions.push({
+        type: "INSTALL_PROGRAM",
+        artifactId: artifact.id,
+        ready: local,
+        instructions: starterProgram,
+      });
+  }
+  if (
+    observation.self.pendingBatches.length === 0 &&
+    observation.self.batches.length === 0
+  ) {
+    const availableInputs = Object.fromEntries(
+      Object.entries(observation.self.inventory).filter(
+        ([, amount]) => (amount ?? 0) > 0,
+      ),
+    );
+    if (Object.keys(availableInputs).length > 0)
+      materialActionOptions.push({
+        type: "FORMULATE",
+        ready: currentFacility !== undefined,
+        currentFacility: currentFacility ?? null,
+        availableInputs,
+        visibleFacilities: observation.cells
+          .filter((cell) => cell.facility)
+          .map((cell) => ({
+            facility: cell.facility,
+            position: cell.position,
+          })),
+      });
+  }
+  return {
+    ...observation,
+    self: {
+      ...observation.self,
+      pendingBatches: observation.self.pendingBatches.map((batch) => ({
+        ...batch,
+        nextOperation:
+          batch.recipe.operations[batch.nextOperationIndex] ?? null,
+      })),
+    },
+    materialActionOptions,
+    cells: observation.cells.slice(0, 96),
+    artifacts: observation.artifacts.slice(0, 32),
+  };
+}
+
 const SYSTEM_PROMPT = `You are one initially homogeneous researcher embodied in a persistent, materially constrained world. No role is assigned to you. Develop bio-inspired material systems for environmental resilience through local exploration, grounded experiments, construction, and optional collaboration.
 
 You only know the supplied local observation, private research state, retrieved evidence, and treatment-permitted records. Textual claims never change physics. Never invent possession, observations, evidence IDs, artifact IDs, batch IDs, or program IDs. You must call submit_plan exactly once. The plan contains research (goal, hypothesis, progress, nextCheckpoint, collaborationNeed) and a bounded sequence of atomic actions. The simulator validates every consequence and may reject actions. Controllers are data: straight-line instructions over registers 0-15 using CONST, SENSOR, COPY, ADD, SUB, MUL, MIN, MAX, GT, LT, ACT. They have no loops, jumps, strings-as-code, files, network, or shell access.
 
+${PI_ACTION_GUIDANCE}
+
 Prefer falsifiable local experiments and durable useful work. You receive no global reward, evaluator formula, predefined recipe, technology catalog, or assigned occupation.`;
 
+export function piStreamOptions(
+  config: ExperimentConfig,
+  options: Parameters<ModelRuntime["streamSimple"]>[2],
+) {
+  return {
+    ...options,
+    toolChoice: "required" as const,
+    ...(config.model.provider === "openai-codex"
+      ? { transport: "sse" as const }
+      : { temperature: config.model.temperature }),
+    maxTokens: 4096,
+    ...(config.model.reasoning === "off"
+      ? {}
+      : { reasoning: config.model.reasoning }),
+  };
+}
+
 export class PiCognition implements Cognition {
-  private models = builtinModels();
-  constructor(private readonly config: ExperimentConfig) {}
+  private runtimePromise: Promise<ModelRuntime> | undefined;
+  constructor(
+    private readonly config: ExperimentConfig,
+    private readonly createRuntime: () => Promise<ModelRuntime> = () =>
+      ModelRuntime.create(),
+  ) {}
+  private getRuntime(): Promise<ModelRuntime> {
+    this.runtimePromise ??= this.createRuntime();
+    return this.runtimePromise;
+  }
   async plan(
     agentState: AgentState,
     observation: LocalObservation,
     capabilities: Capabilities,
     signal?: AbortSignal,
   ): Promise<AgentPlan> {
-    const model = this.models.getModel(
+    const runtime = await this.getRuntime();
+    const model = runtime.getModel(
       this.config.model.provider,
       this.config.model.id,
     );
@@ -277,9 +425,7 @@ export class PiCognition implements Cognition {
       label: "Submit Plan",
       description:
         "Commit one schema-constrained research-state update and bounded atomic action plan.",
-      parameters: Type.Unsafe<AgentPlan>(
-        z.toJSONSchema(planSchema) as Record<string, unknown>,
-      ),
+      parameters: planToolParameters(),
       constrainedSampling: {
         type: "json_schema" as const,
         strict: "prefer" as const,
@@ -307,31 +453,33 @@ export class PiCognition implements Cognition {
         messages: [],
       },
       streamFn: (activeModel, context, options) =>
-        this.models.streamSimple(activeModel, context, {
-          ...options,
-          temperature: this.config.model.temperature,
-          maxTokens: 4096,
-          ...(this.config.model.reasoning === "off"
-            ? {}
-            : { reasoning: this.config.model.reasoning }),
-        }),
+        runtime.streamSimple(
+          activeModel,
+          context,
+          // Pi 0.84.4's Codex adapter supports "required", but the shared
+          // SimpleStreamOptions ToolChoice type still only lists auto/none.
+          piStreamOptions(this.config, options) as unknown as Parameters<
+            ModelRuntime["streamSimple"]
+          >[2],
+        ),
       sessionId: `swarmworld-${agentState.id}`,
     });
     if (signal?.aborted) throw signal.reason;
+    const currentObservation = piObservationForModel(observation);
     const context = {
       treatmentCapabilities: capabilities,
-      observation: {
-        ...observation,
-        cells: observation.cells.slice(0, 96),
-        artifacts: observation.artifacts.slice(0, 32),
-      },
-      privateResearchState: agentState.research,
-      recentMemory: agentState.memory.slice(-32),
+      historicalResearchState: agentState.research,
+      recentHistoricalMemory: agentState.memory.slice(-32),
+      currentObservation,
+      currentMaterialActionOptions: currentObservation.materialActionOptions,
     };
     await agent.prompt(JSON.stringify(context));
+    const lastMessage = agent.state.messages.at(-1);
+    if (lastMessage?.role === "assistant" && lastMessage.stopReason === "error")
+      throw new Error(lastMessage.errorMessage ?? "Pi model request failed");
     try {
       if (!submitted) throw new Error("Model did not call submit_plan");
-      const parsed = planSchema.parse(submitted);
+      const parsed = parseAgentPlan(submitted);
       return {
         research: parsed.research,
         actions: parsed.actions.slice(0, this.config.planLimit) as Action[],
@@ -343,18 +491,6 @@ export class PiCognition implements Cognition {
     }
   }
 }
-
-const starterProgram = [
-  { op: "SENSOR", dst: 0, sensor: "water" },
-  { op: "CONST", dst: 1, value: 0.55 },
-  { op: "LT", dst: 2, a: 0, b: 1 },
-  { op: "CONST", dst: 3, value: 0.04 },
-  { op: "MUL", dst: 4, a: 2, b: 3 },
-  { op: "ACT", a: 4, actuator: "COLLECT_WATER" },
-  { op: "SENSOR", dst: 5, sensor: "contamination" },
-  { op: "MUL", dst: 6, a: 5, b: 3 },
-  { op: "ACT", a: 6, actuator: "REMEDIATE" },
-] as import("./types.js").Instruction[];
 
 function pathTo(
   from: { x: number; y: number },

@@ -17,7 +17,7 @@ const configSchema = z.object({
   cognition: z.enum(["heuristic", "pi"]).default("heuristic"),
   model: z
     .object({
-      provider: z.string().default("openai"),
+      provider: z.string().default("openai-codex"),
       id: z.string().default("gpt-5.6-luna"),
       temperature: z.number().min(0).max(2).default(0.7),
       reasoning: z
@@ -25,7 +25,7 @@ const configSchema = z.object({
         .default("low"),
     })
     .default({
-      provider: "openai",
+      provider: "openai-codex",
       id: "gpt-5.6-luna",
       temperature: 0.7,
       reasoning: "low",
