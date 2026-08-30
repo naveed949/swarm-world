@@ -133,8 +133,11 @@ export interface RepositoryObservation {
   ownedRecipes: Array<{
     id: string;
     targets: string[];
+    targetContentHashes: Record<string, string>;
+    requiredFacilityIds: string[];
     patchHash: string;
     passedFacilityIds: string[];
+    failedFacilityIds: string[];
   }>;
   ownedArtifactIds: string[];
   taskClaims: Array<{ taskId: string; agentId: string }>;

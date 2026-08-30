@@ -207,14 +207,64 @@ export class RepositoryEnvironment implements Environment<
           }
       frontier = next.sort();
     }
+    const nodePriority: Record<RepositoryNodeType, number> = {
+      task: 0,
+      file: 1,
+      test: 1,
+      facility: 2,
+      module: 3,
+      symbol: 4,
+      pending_patch: 5,
+      diagnostic: 6,
+      accepted_artifact: 7,
+    };
     const nodes = [...visible]
       .map((id) => this.nodes.get(id)!)
       .filter(Boolean)
-      .sort((a, b) => a.id.localeCompare(b.id))
+      .sort(
+        (a, b) =>
+          nodePriority[a.type] - nodePriority[b.type] ||
+          a.id.localeCompare(b.id),
+      )
       .slice(0, this.config.observationLimit);
     const ids = new Set(nodes.map((node) => node.id));
     for (const id of ids) agent.observedNodes.add(id);
     const caps = capabilities(this.config.condition ?? "full");
+    const ownedRecipes = await Promise.all(
+      [...this.recipes.values()]
+        .filter((recipe) => recipe.ownerId === agent.id)
+        .map(async (recipe) => ({
+          id: recipe.id,
+          targets: [...recipe.targets],
+          targetContentHashes: Object.fromEntries(
+            await Promise.all(
+              recipe.targets.map(async (path) => [
+                path,
+                sha256(
+                  await readFile(resolve(recipe.worktree, path), "utf8").catch(
+                    () => "",
+                  ),
+                ),
+              ]),
+            ),
+          ),
+          requiredFacilityIds: [...recipe.requiredFacilities],
+          patchHash: recipe.patchHash,
+          passedFacilityIds: [...recipe.checks.keys()].sort(),
+          failedFacilityIds: [...agent.evidence]
+            .map((id) => this.evidence.get(id))
+            .filter(
+              (evidence): evidence is Evidence =>
+                evidence?.kind === "facility_result" &&
+                evidence.data.patchHash === recipe.patchHash &&
+                evidence.data.success === false &&
+                typeof evidence.data.facilityId === "string",
+            )
+            .map((evidence) => evidence.data.facilityId as string)
+            .filter((id, index, values) => values.indexOf(id) === index)
+            .sort(),
+        })),
+    );
     return {
       revision: this.candidateCommit,
       focusNodeId: agent.focusNodeId,
@@ -251,15 +301,7 @@ export class RepositoryEnvironment implements Environment<
         .filter((recipe) => recipe.ownerId === agent.id)
         .map((recipe) => recipe.id)
         .sort(),
-      ownedRecipes: [...this.recipes.values()]
-        .filter((recipe) => recipe.ownerId === agent.id)
-        .map((recipe) => ({
-          id: recipe.id,
-          targets: [...recipe.targets],
-          patchHash: recipe.patchHash,
-          passedFacilityIds: [...recipe.checks.keys()].sort(),
-        }))
-        .sort((a, b) => a.id.localeCompare(b.id)),
+      ownedRecipes: ownedRecipes.sort((a, b) => a.id.localeCompare(b.id)),
       ownedArtifactIds: [...this.artifacts.values()]
         .filter((artifact) => artifact.authorId === agent.id)
         .map((artifact) => artifact.id)
@@ -1077,21 +1119,24 @@ export class RepositoryEnvironment implements Environment<
       facility.id,
       (this.facilityActive.get(facility.id) ?? 0) + 1,
     );
-    await run("git", ["-C", recipe.worktree, "add", "--", ...recipe.targets]);
-    const treeHash = (
-      await run("git", ["-C", recipe.worktree, "write-tree"], {
-        encoding: "utf8",
-      })
-    ).stdout.trim();
-    const result = await this.executeFacility(
-      facility,
-      recipe.worktree,
-    ).finally(() =>
+    let treeHash: string;
+    let result: Awaited<ReturnType<RepositoryEnvironment["executeFacility"]>>;
+    try {
+      const changed = await this.changedPaths(recipe.worktree);
+      if (!changed.length) throw new Error("patch is empty");
+      await run("git", ["-C", recipe.worktree, "add", "--", ...changed]);
+      treeHash = (
+        await run("git", ["-C", recipe.worktree, "write-tree"], {
+          encoding: "utf8",
+        })
+      ).stdout.trim();
+      result = await this.executeFacility(facility, recipe.worktree);
+    } finally {
       this.facilityActive.set(
         facility.id,
         (this.facilityActive.get(facility.id) ?? 1) - 1,
-      ),
-    );
+      );
+    }
     const evidence = this.makeEvidence(
       agent.id,
       "facility_result",
@@ -1159,7 +1204,8 @@ export class RepositoryEnvironment implements Environment<
         "CONSTRUCT_ARTIFACT",
         "mandatory checks are missing or stale",
       );
-    await run("git", ["-C", recipe.worktree, "add", "--", ...recipe.targets]);
+    const changed = await this.changedPaths(recipe.worktree);
+    await run("git", ["-C", recipe.worktree, "add", "--", ...changed]);
     const commitDate = await this.commitDate(recipe.baseCommit);
     await run(
       "git",
@@ -1258,10 +1304,17 @@ export class RepositoryEnvironment implements Environment<
     const executable = isNodeFacility
       ? facility.executable
       : facility.sandbox!.executable;
+    const dependencyPath = isNodeFacility
+      ? await realpath(join(canonicalWorktree, "node_modules")).catch(
+          () => undefined,
+        )
+      : undefined;
     const args = isNodeFacility
       ? [
           "--permission",
           `--allow-fs-read=${canonicalWorktree}`,
+          ...(dependencyPath ? [`--allow-fs-read=${dependencyPath}`] : []),
+          "--allow-worker",
           ...(facility.mutationClass === "worktree"
             ? [`--allow-fs-write=${canonicalWorktree}`]
             : []),
@@ -1458,13 +1511,21 @@ export class RepositoryEnvironment implements Environment<
   }
 
   private async patchHash(worktree: string): Promise<string> {
-    const output = (
+    const trackedDiff = (
       await run("git", ["-C", worktree, "diff", "--binary", "HEAD"], {
         encoding: "utf8",
         maxBuffer: 4 * 1024 * 1024,
       })
     ).stdout;
-    return sha256(output);
+    const untracked = await this.untrackedPaths(worktree);
+    if (!trackedDiff && !untracked.length) return sha256("");
+    const untrackedContent = await Promise.all(
+      untracked.map(async (path) => ({
+        path,
+        contentHash: sha256(await readFile(resolve(worktree, path))),
+      })),
+    );
+    return sha256({ trackedDiff, untracked: untrackedContent });
   }
 
   private async workspaceStateHash(worktree: string): Promise<string> {
@@ -1493,6 +1554,19 @@ export class RepositoryEnvironment implements Environment<
       .sort();
   }
 
+  private async untrackedPaths(worktree: string): Promise<string[]> {
+    return (
+      await run(
+        "git",
+        ["-C", worktree, "ls-files", "--others", "--exclude-standard"],
+        { encoding: "utf8" },
+      )
+    ).stdout
+      .split("\n")
+      .filter(Boolean)
+      .sort();
+  }
+
   private async diffStats(
     worktree: string,
   ): Promise<{ files: number; lines: number }> {
@@ -1501,8 +1575,12 @@ export class RepositoryEnvironment implements Environment<
         encoding: "utf8",
       })
     ).stdout.trim();
-    if (!output) return { files: 0, lines: 0 };
-    const rows = output.split("\n");
+    const rows = output ? output.split("\n") : [];
+    for (const path of await this.untrackedPaths(worktree)) {
+      const content = await readFile(resolve(worktree, path), "utf8");
+      rows.push(`${content === "" ? 0 : content.split("\n").length}\t0\t${path}`);
+    }
+    if (!rows.length) return { files: 0, lines: 0 };
     return {
       files: rows.length,
       lines: rows.reduce((total, row) => {

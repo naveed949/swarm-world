@@ -94,6 +94,24 @@ describe("RepositoryEnvironment", () => {
     );
   });
 
+  it("retains task-relevant files before symbols at a tight observation limit", async () => {
+    const config = fixture();
+    config.observationLimit = 3;
+    const environment = await RepositoryEnvironment.create(config);
+    const agent = environment.createAgent("agent-1");
+
+    const observation = await environment.observe({ agentId: agent.id });
+
+    expect(observation.nodes.map((node) => node.type)).toEqual([
+      "task",
+      "file",
+      "test",
+    ]);
+    expect(observation.nodes.map((node) => node.path).filter(Boolean)).toEqual(
+      expect.arrayContaining(["math.ts", "math.test.ts"]),
+    );
+  });
+
   it("exposes an operator-approved new task path as an empty planned file", async () => {
     const config = fixture();
     config.allowedPaths.push("new.ts");

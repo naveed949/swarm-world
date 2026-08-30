@@ -3,6 +3,7 @@ import { Type } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
 import type { EnvironmentPlanner } from "./environment-simulator.js";
+import { sha256 } from "./hash.js";
 import type { RepositoryRunConfig } from "./run-config.js";
 import type {
   RepositoryAction,
@@ -113,7 +114,123 @@ const SYSTEM_PROMPT = `You are a bounded repository agent operating on one real 
 
 Call submit_repository_plan exactly once with exactly one atomic action. Use only IDs, paths, content hashes, evidence, recipes, artifacts, facilities, and affordances present in the current context. Never invent state. Results from an action arrive only in a later observation.
 
-The implementer may inspect, search, formulate one evidence-backed recipe, apply preconditioned edits, run configured fixed checks, construct an artifact, and request integration. A collaborator is read-only and should inspect/search, communicate grounded findings to agent_000000, or publish a finding. Prefer WAIT when the next safe action is unavailable. Never place credentials or issue-tracker mutations in code, messages, findings, or artifacts.`;
+The implementer must follow plannerPhase.requiredActionTypes. Once it owns a recipe it must not explore or formulate again: edit the recipe, run every missing fixed check, construct the artifact, then request integration. A collaborator is read-only and should inspect/search, communicate grounded findings to agent_000000, or publish a finding. Prefer WAIT when the next safe action is unavailable. Never place credentials or issue-tracker mutations in code, messages, findings, or artifacts.`;
+
+type JsonSchema = Record<string, unknown>;
+
+export function repositoryPlanJsonSchema(
+  context: Record<string, unknown>,
+): JsonSchema {
+  const schema = structuredClone(z.toJSONSchema(planSchema)) as JsonSchema;
+  const properties = schema.properties as JsonSchema;
+  const actions = properties.actions as JsonSchema;
+  const items = actions.items as JsonSchema;
+  const variants = items.oneOf as JsonSchema[];
+  const phase = context.plannerPhase as
+    | {
+        requiredActionTypes?: string[];
+        recipeId?: string;
+        targetContentHashes?: Record<string, string>;
+        missingFacilityIds?: string[];
+      }
+    | undefined;
+  if (!phase?.requiredActionTypes) return schema;
+  const allowed = new Set(["WAIT", ...phase.requiredActionTypes]);
+  items.oneOf = variants
+    .filter((variant) => {
+      const fields = variant.properties as JsonSchema;
+      const type = fields.type as JsonSchema;
+      return allowed.has(type.const as string);
+    })
+    .flatMap((variant) => {
+      const fields = variant.properties as JsonSchema;
+      const type = (fields.type as JsonSchema).const;
+      if (phase.recipeId && "recipeId" in fields)
+        fields.recipeId = { type: "string", const: phase.recipeId };
+      if (
+        (type === "EDIT" || type === "EDIT_REPLACE") &&
+        phase.targetContentHashes
+      )
+        return Object.entries(phase.targetContentHashes).map(
+          ([path, contentHash]) => {
+            const targetVariant = structuredClone(variant);
+            const targetFields = targetVariant.properties as JsonSchema;
+            targetFields.path = { type: "string", const: path };
+            targetFields.expectedContentHash = {
+              type: "string",
+              const: contentHash,
+            };
+            return targetVariant;
+          },
+        );
+      if (type === "RUN_CHECK" && phase.missingFacilityIds?.length)
+        fields.facilityId = {
+          type: "string",
+          enum: phase.missingFacilityIds,
+        };
+      return [variant];
+    });
+  return schema;
+}
+
+function implementerPhase(observation: RepositoryObservation): {
+  name: string;
+  requiredActionTypes: RepositoryAction["type"][];
+  recipeId?: string;
+  targetContentHashes?: Record<string, string>;
+  missingFacilityIds?: string[];
+} {
+  const artifactId = observation.ownedArtifactIds[0];
+  if (artifactId)
+    return {
+      name: "request-integration",
+      requiredActionTypes: ["REQUEST_INTEGRATION"],
+    };
+  const recipe = observation.ownedRecipes[0];
+  if (!recipe)
+    return {
+      name: "discover-or-formulate",
+      requiredActionTypes: [
+        "CLAIM_TASK",
+        "FOCUS",
+        "INSPECT",
+        "SEARCH",
+        "COMMUNICATE",
+        "FORMULATE",
+      ],
+    };
+  if (recipe.patchHash === sha256(""))
+    return {
+      name: "edit-recipe",
+      requiredActionTypes: ["EDIT", "EDIT_REPLACE"],
+      recipeId: recipe.id,
+      targetContentHashes: recipe.targetContentHashes,
+    };
+  if (recipe.failedFacilityIds.length)
+    return {
+      name: "repair-recipe",
+      requiredActionTypes: ["EDIT", "EDIT_REPLACE"],
+      recipeId: recipe.id,
+      targetContentHashes: recipe.targetContentHashes,
+      missingFacilityIds: recipe.failedFacilityIds,
+    };
+  const missingFacilityIds = recipe.requiredFacilityIds.filter(
+    (id) => !recipe.passedFacilityIds.includes(id),
+  );
+  if (missingFacilityIds.length)
+    return {
+      name: "edit-or-verify-recipe",
+      requiredActionTypes: ["EDIT", "EDIT_REPLACE", "RUN_CHECK"],
+      recipeId: recipe.id,
+      targetContentHashes: recipe.targetContentHashes,
+      missingFacilityIds,
+    };
+  return {
+    name: "construct-artifact",
+    requiredActionTypes: ["CONSTRUCT_ARTIFACT"],
+    recipeId: recipe.id,
+  };
+}
 
 export function createPiModelRequest(
   config: RepositoryRunConfig,
@@ -139,9 +256,7 @@ export function createPiModelRequest(
       name: "submit_repository_plan",
       label: "Submit Repository Plan",
       description: "Submit exactly one schema-constrained repository action.",
-      parameters: Type.Unsafe(
-        structuredClone(z.toJSONSchema(planSchema)) as Record<string, unknown>,
-      ),
+      parameters: Type.Unsafe(repositoryPlanJsonSchema(context)),
       constrainedSampling: {
         type: "json_schema" as const,
         strict: "prefer" as const,
@@ -209,9 +324,12 @@ export function createPiRepositoryPlanner(
   return {
     plan: async ({ agentId, tick, observation }) => {
       const role = agentId === "agent_000000" ? "implementer" : "collaborator";
+      const plannerPhase =
+        role === "implementer" ? implementerPhase(observation) : undefined;
       const context = {
         role,
         tick,
+        ...(plannerPhase ? { plannerPhase } : {}),
         task: config.environment.task,
         patchPolicy: config.environment.patch,
         configuredFacilities: config.environment.facilities.map((facility) => ({
@@ -227,6 +345,11 @@ export function createPiRepositoryPlanner(
         const parsed = planSchema.parse(response);
         const action = parsed.actions[0] as RepositoryAction;
         if (!observation.affordances.includes(action.type))
+          return [{ type: "WAIT" }];
+        if (
+          plannerPhase &&
+          !plannerPhase.requiredActionTypes.includes(action.type)
+        )
           return [{ type: "WAIT" }];
         if (role === "collaborator" && !COLLABORATOR_ACTIONS.has(action.type))
           return [{ type: "WAIT" }];
