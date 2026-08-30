@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { EnvironmentPlanner } from "./environment-simulator.js";
 import { EnvironmentSimulator } from "./environment-simulator.js";
 import { sha256 } from "./hash.js";
+import { createPiRepositoryPlanner } from "./repository-pi-planner.js";
 import {
   RepositoryEnvironment,
   type RepositoryAction,
@@ -134,7 +135,9 @@ export function createRepositoryPlanner(
     ? surveyPlanner(config)
     : config.planner === "scripted"
       ? scriptedPlanner(config)
-      : waitPlanner;
+      : config.planner === "pi"
+        ? createPiRepositoryPlanner(config)
+        : waitPlanner;
 }
 
 export async function runRepositoryExperiment(

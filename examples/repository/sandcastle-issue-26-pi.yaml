@@ -1,0 +1,119 @@
+seed: 3226
+population: 2
+ticks: 50
+macroturnInterval: 1
+planLimit: 1
+condition: full
+planner: pi
+model:
+  provider: openai-codex
+  id: gpt-5.6-luna
+  temperature: 0
+  reasoning: medium
+
+environment:
+  type: repository
+  root: ../../workspace/target
+  baseCommit: f36d8413aec7f4b167114a55ee9b516d1c1d6c4d
+  readOnly: false
+  task:
+    id: sandcastle-issue-26
+    title: Publish one approved task as a draft pull request
+    acceptanceCriteria:
+      - Publishing is allowed only for verified implementation with an approved review at the current workflow revision.
+      - The publisher targets the authorized repository and configured base branch.
+      - Retrying publication reconciles the same branch and draft PR instead of creating duplicates.
+      - The PR body links issue 26 and summarizes plan, verification, review, and remediation evidence.
+      - Provenance includes repository, task, revision, base and head commits, branch, PR number, and publication attempt.
+      - Base or head drift is detected and classified before publication completes.
+      - Mission Control exposes publication progress, PR link, and actionable failure evidence.
+      - Tests cover first publish, partial-success retry, existing draft reconciliation, wrong-repository protection, and commit drift.
+    acceptanceFacilityIds:
+      - workflow-publication-tests
+    regressionFacilityIds:
+      - workflow-publication-tests
+    relevantPaths:
+      - src/RepositoryWorkflowPublication.ts
+      - src/RepositoryWorkflowPublication.test.ts
+      - src/RepositoryWorkflowCoordinator.ts
+      - src/RepositoryWorkflowCoordinator.test.ts
+      - src/RepositoryWorkflowControl.ts
+      - src/MissionControlReadModel.ts
+      - src/WorkerPublication.ts
+      - src/index.ts
+      - .changeset/unified-workflow-draft-publication.md
+    priority: 26
+  observationRadius: 2
+  observationLimit: 96
+  allowedPaths:
+    - src/RepositoryWorkflowPublication.ts
+    - src/RepositoryWorkflowPublication.test.ts
+    - src/RepositoryWorkflowCoordinator.ts
+    - src/RepositoryWorkflowCoordinator.test.ts
+    - src/RepositoryWorkflowControl.ts
+    - src/MissionControlReadModel.ts
+    - src/WorkerPublication.ts
+    - src/index.ts
+    - .changeset/unified-workflow-draft-publication.md
+  excludedPaths:
+    - .env
+    - .sandcastle/.env
+    - node_modules/**
+  patch:
+    maxFiles: 9
+    maxChangedLines: 900
+  facilities:
+    - id: workflow-publication-tests
+      category: test
+      executable: /usr/local/bin/node
+      args:
+        - node_modules/vitest/vitest.mjs
+        - run
+        - src/RepositoryWorkflowPublication.test.ts
+        - src/RepositoryWorkflowCoordinator.test.ts
+        - --pool=threads
+        - --maxWorkers=1
+      workingDirectory: .
+      permittedPaths:
+        - src/RepositoryWorkflowPublication.ts
+        - src/RepositoryWorkflowPublication.test.ts
+        - src/RepositoryWorkflowCoordinator.ts
+        - src/RepositoryWorkflowCoordinator.test.ts
+        - src/RepositoryWorkflowControl.ts
+        - src/MissionControlReadModel.ts
+        - src/WorkerPublication.ts
+        - src/index.ts
+        - .changeset/unified-workflow-draft-publication.md
+      mutationClass: none
+      timeoutMs: 120000
+      outputLimit: 12000
+      concurrency: 1
+      environment:
+        CI: "1"
+      mandatory: true
+    - id: typecheck
+      category: typecheck
+      executable: /usr/local/bin/node
+      args:
+        - node_modules/typescript/bin/tsc
+        - --project
+        - tsconfig.json
+        - --noEmit
+      workingDirectory: .
+      permittedPaths:
+        - src/RepositoryWorkflowPublication.ts
+        - src/RepositoryWorkflowPublication.test.ts
+        - src/RepositoryWorkflowCoordinator.ts
+        - src/RepositoryWorkflowCoordinator.test.ts
+        - src/RepositoryWorkflowControl.ts
+        - src/MissionControlReadModel.ts
+        - src/WorkerPublication.ts
+        - src/index.ts
+        - .changeset/unified-workflow-draft-publication.md
+      mutationClass: none
+      timeoutMs: 120000
+      outputLimit: 12000
+      concurrency: 1
+      environment:
+        CI: "1"
+      mandatory: true

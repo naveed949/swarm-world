@@ -49,4 +49,48 @@ describe("repository container runner", () => {
     expect(config).toContain("maxFiles: 1");
     expect(config).toContain("ISSUE_REPOSITORY=naveed949/sandcastle");
   });
+
+  it("isolates Pi credentials in a sidecar and keeps the repository runner internal", () => {
+    const script = readFileSync(
+      "scripts/run-repository-pi-container.sh",
+      "utf8",
+    );
+
+    for (const constraint of [
+      "--network bridge",
+      "--read-only",
+      "--cap-drop ALL",
+      "--security-opt no-new-privileges",
+      "dst=/input,readonly",
+      "dst=/run/secrets/pi-auth.json,readonly",
+      "docker network create --internal",
+      "SWARM_WORLD_PI_SIDECAR_URL",
+      "SWARM_WORLD_DEPENDENCIES",
+    ])
+      expect(script).toContain(constraint);
+    expect(script.match(/dst=\/run\/secrets\/pi-auth\.json/g)).toHaveLength(1);
+    expect(script).not.toContain("SWARM_WORLD_PI_AUTH_PATH");
+    expect(script).toContain('--network "$network_name"');
+    expect(script).toContain("repository-dependencies-entrypoint.sh");
+    expect(
+      readFileSync("docker/repository-dependencies-entrypoint.sh", "utf8"),
+    ).toContain("--cache /tmp/npm-cache");
+    expect(script).not.toContain("docker.sock");
+    expect(script).not.toContain("GH_TOKEN");
+    expect(script).not.toContain("OPENAI_API_KEY");
+  });
+
+  it("binds the live Pi example to real issue 26 and its rolling base", () => {
+    const config = readFileSync(
+      "examples/repository/sandcastle-issue-26-pi.yaml",
+      "utf8",
+    );
+
+    expect(config).toContain("planner: pi");
+    expect(config).toContain("id: sandcastle-issue-26");
+    expect(config).toContain(
+      "baseCommit: f36d8413aec7f4b167114a55ee9b516d1c1d6c4d",
+    );
+    expect(config).toContain("readOnly: false");
+  });
 });

@@ -122,7 +122,20 @@ export interface RepositoryObservation {
   nodes: RepositoryNode[];
   edges: RepositoryEdge[];
   ownedEvidenceIds: string[];
+  inspectedNodeIds: string[];
+  ownedEvidence: Array<{
+    id: string;
+    kind: string;
+    digest: string;
+    data: Record<string, unknown>;
+  }>;
   ownedRecipeIds: string[];
+  ownedRecipes: Array<{
+    id: string;
+    targets: string[];
+    patchHash: string;
+    passedFacilityIds: string[];
+  }>;
   ownedArtifactIds: string[];
   taskClaims: Array<{ taskId: string; agentId: string }>;
   messages: Array<{ senderId: string; recipientId: string; text: string }>;

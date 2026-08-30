@@ -21,6 +21,7 @@
     "example:sandcastle:prepare": "sh scripts/prepare-sandcastle-example.sh",
     "example:sandcastle": "sh scripts/run-repository-container.sh .examples/sandcastle examples/repository/sandcastle.yaml runs/sandcastle-container",
     "example:sandcastle:write": "sh scripts/run-repository-container.sh .examples/sandcastle examples/repository/sandcastle-write.yaml runs/sandcastle-write-container",
+    "example:sandcastle:issue-26:pi": "sh scripts/run-repository-pi-container.sh .examples/sandcastle-issue-26 examples/repository/sandcastle-issue-26-pi.yaml runs/sandcastle-issue-26-pi",
     "test:repository:docker": "sh scripts/test-sandcastle-write-container.sh",
     "verify": "npm run check && npm run lint && npm run test && npm run build"
   },

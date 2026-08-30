@@ -227,10 +227,39 @@ export class RepositoryEnvironment implements Environment<
           ),
         ),
       ownedEvidenceIds: [...agent.evidence].sort(),
+      inspectedNodeIds: [...agent.evidence]
+        .map((id) => this.evidence.get(id))
+        .filter(
+          (evidence): evidence is Evidence =>
+            evidence?.kind === "inspection" &&
+            typeof evidence.data.nodeId === "string",
+        )
+        .map((evidence) => evidence.data.nodeId as string)
+        .filter((id, index, values) => values.indexOf(id) === index)
+        .sort(),
+      ownedEvidence: [...agent.evidence]
+        .map((id) => this.evidence.get(id))
+        .filter((evidence): evidence is Evidence => evidence !== undefined)
+        .slice(-6)
+        .map((evidence) => ({
+          id: evidence.id,
+          kind: evidence.kind,
+          digest: evidence.digest,
+          data: this.boundedEvidenceData(evidence.data),
+        })),
       ownedRecipeIds: [...this.recipes.values()]
         .filter((recipe) => recipe.ownerId === agent.id)
         .map((recipe) => recipe.id)
         .sort(),
+      ownedRecipes: [...this.recipes.values()]
+        .filter((recipe) => recipe.ownerId === agent.id)
+        .map((recipe) => ({
+          id: recipe.id,
+          targets: [...recipe.targets],
+          patchHash: recipe.patchHash,
+          passedFacilityIds: [...recipe.checks.keys()].sort(),
+        }))
+        .sort((a, b) => a.id.localeCompare(b.id)),
       ownedArtifactIds: [...this.artifacts.values()]
         .filter((artifact) => artifact.authorId === agent.id)
         .map((artifact) => artifact.id)
@@ -256,6 +285,19 @@ export class RepositoryEnvironment implements Environment<
         verification: agent.verificationRemaining,
         writes: agent.writesRemaining,
       },
+    };
+  }
+
+  private boundedEvidenceData(
+    data: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const content = data.content;
+    if (typeof content !== "string" || content.length <= 30_000)
+      return structuredClone(data);
+    return {
+      ...structuredClone(data),
+      content: content.slice(0, 30_000),
+      contentTruncated: true,
     };
   }
 
@@ -762,8 +804,25 @@ export class RepositoryEnvironment implements Environment<
         this.edge(file.id, symbol.id, "containment");
       }
     }
+    for (const path of this.config.task.relevantPaths
+      .filter((path) => this.permitted(path) && !files.has(path))
+      .sort()) {
+      const type: RepositoryNodeType = /\.(test|spec)\.[^.]+$/.test(path)
+        ? "test"
+        : "file";
+      const file = this.node(type, path, basename(path), path, sha256(""));
+      files.set(path, file);
+      const modulePath = dirname(path) === "." ? "." : dirname(path);
+      let module = modules.get(modulePath);
+      if (!module) {
+        module = this.node("module", modulePath, modulePath);
+        modules.set(modulePath, module);
+      }
+      this.edge(module.id, file.id, "containment");
+      this.edge(taskNode.id, file.id, "task_relevance");
+    }
     for (const [path, source] of files) {
-      const content = await this.gitShow(this.baseCommit, path);
+      const content = await this.gitShow(this.baseCommit, path).catch(() => "");
       for (const match of content.matchAll(
         /(?:from\s+|import\s*\()?["'](\.[^"']+)["']/g,
       )) {
@@ -806,7 +865,10 @@ export class RepositoryEnvironment implements Environment<
     if (!node || !agent.observedNodes.has(nodeId))
       return this.reject(agent.id, "INSPECT", "node not observed");
     const content = node.path
-      ? await this.gitShow(this.candidateCommit, node.path)
+      ? await this.gitShow(this.candidateCommit, node.path).catch((error) => {
+          if (node.contentHash === sha256("")) return "";
+          throw error;
+        })
       : JSON.stringify(node);
     const evidence = this.makeEvidence(
       agent.id,
@@ -944,7 +1006,11 @@ export class RepositoryEnvironment implements Environment<
     )
       return this.reject(agent.id, actionType, "patch or target unavailable");
     const target = await this.safeWorktreePath(recipe.worktree, action.path);
-    const current = await readFile(target, "utf8");
+    const current = await readFile(target, "utf8").catch((error: unknown) => {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT")
+        return "";
+      throw error;
+    });
     if (sha256(current) !== action.expectedContentHash)
       return this.reject(agent.id, actionType, "stale content precondition");
     await writeFile(target, action.content, "utf8");

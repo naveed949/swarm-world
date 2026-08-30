@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { sha256 } from "../src/hash.js";
 import {
   RepositoryEnvironment,
   type RepositoryEnvironmentConfig,
@@ -91,6 +92,33 @@ describe("RepositoryEnvironment", () => {
     expect(first.edges.some((edge) => edge.type === "test_relation")).toBe(
       true,
     );
+  });
+
+  it("exposes an operator-approved new task path as an empty planned file", async () => {
+    const config = fixture();
+    config.allowedPaths.push("new.ts");
+    config.task.relevantPaths.push("new.ts");
+    const environment = await RepositoryEnvironment.create(config);
+    const agent = environment.createAgent("agent-1");
+
+    const observation = await environment.observe({ agentId: agent.id });
+
+    expect(observation.nodes).toContainEqual(
+      expect.objectContaining({
+        path: "new.ts",
+        contentHash: sha256(""),
+      }),
+    );
+    const planned = observation.nodes.find((node) => node.path === "new.ts")!;
+    await expect(
+      environment.resolve({
+        agentId: agent.id,
+        action: { type: "INSPECT", nodeId: planned.id },
+      }),
+    ).resolves.toMatchObject({ accepted: true });
+    expect(
+      (await environment.observe({ agentId: agent.id })).inspectedNodeIds,
+    ).toContain(planned.id);
   });
 
   it("runs a deterministic read-only multi-agent survey", async () => {
@@ -359,6 +387,45 @@ describe("RepositoryEnvironment", () => {
     expect(records.some((record) => record.recordType === "scheduler")).toBe(
       true,
     );
+  });
+
+  it("loads a Pi repository planner with an explicit model", async () => {
+    const environment = fixture(false);
+    const directory = mkdtempSync(join(tmpdir(), "swarm-world-pi-config-"));
+    const path = join(directory, "repository.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        seed: 26,
+        population: 2,
+        ticks: 20,
+        macroturnInterval: 1,
+        planLimit: 1,
+        condition: "full",
+        planner: "pi",
+        model: {
+          provider: "openai-codex",
+          id: "gpt-5.6-luna",
+          temperature: 0,
+          reasoning: "medium",
+        },
+        environment: { type: "repository", ...environment },
+      }),
+    );
+
+    const loaded = await loadRunConfig(path);
+
+    expect(loaded).toMatchObject({
+      type: "repository",
+      config: {
+        planner: "pi",
+        model: {
+          provider: "openai-codex",
+          id: "gpt-5.6-luna",
+          reasoning: "medium",
+        },
+      },
+    });
   });
 
   it("runs independent-search agents in separate repository worlds", async () => {

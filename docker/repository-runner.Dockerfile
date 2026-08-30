@@ -20,7 +20,11 @@ RUN npm ci --omit=dev --ignore-scripts \
   && npm cache clean --force
 COPY --from=build /app/dist ./dist
 COPY docker/repository-entrypoint.sh ./docker/repository-entrypoint.sh
+COPY docker/pi-sidecar-entrypoint.sh ./docker/pi-sidecar-entrypoint.sh
+COPY docker/repository-dependencies-entrypoint.sh ./docker/repository-dependencies-entrypoint.sh
 RUN chmod 0555 ./docker/repository-entrypoint.sh \
+  ./docker/pi-sidecar-entrypoint.sh \
+  ./docker/repository-dependencies-entrypoint.sh \
   && chown -R 10001:10001 /app
 
 USER 10001:10001

@@ -20,6 +20,10 @@ mkdir -p /tmp/home /workspace/target
 rmdir /workspace/target
 git -c safe.directory=/input clone --quiet --no-hardlinks /input /workspace/target
 
+if [ -n "${SWARM_WORLD_DEPENDENCIES:-}" ]; then
+  ln -s "$SWARM_WORLD_DEPENDENCIES" /workspace/target/node_modules
+fi
+
 exec node /app/dist/cli.js run \
   --config /config/repository.yaml \
   --output /output

@@ -16,7 +16,13 @@ export interface RepositoryRunConfig {
   macroturnInterval: number;
   planLimit: number;
   condition: Condition;
-  planner?: "wait" | "survey" | "scripted";
+  planner?: "wait" | "survey" | "scripted" | "pi";
+  model?: {
+    provider: string;
+    id: string;
+    temperature: number;
+    reasoning: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  };
   surveyQueries?: string[];
   scriptedChange?: {
     targetPath: string;
@@ -67,7 +73,17 @@ const repositoryRunSchema = z
     condition: z
       .enum(["full", "no-communication", "no-explicit-culture", "independent"])
       .default("full"),
-    planner: z.enum(["wait", "survey", "scripted"]).default("wait"),
+    planner: z.enum(["wait", "survey", "scripted", "pi"]).default("wait"),
+    model: z
+      .object({
+        provider: z.string().min(1),
+        id: z.string().min(1),
+        temperature: z.number().min(0).max(2).default(0),
+        reasoning: z
+          .enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"])
+          .default("medium"),
+      })
+      .optional(),
     surveyQueries: z.array(z.string().min(1).max(256)).default([]),
     scriptedChange: z
       .object({
@@ -103,6 +119,12 @@ const repositoryRunSchema = z
     }),
   })
   .superRefine((config, context) => {
+    if (config.planner === "pi" && !config.model)
+      context.addIssue({
+        code: "custom",
+        message: "Pi repository planner requires a model",
+        path: ["model"],
+      });
     if (config.planner !== "scripted") return;
     if (!config.scriptedChange)
       context.addIssue({
@@ -167,6 +189,7 @@ export async function loadRunConfig(path: string): Promise<RunConfig> {
       planLimit: parsed.planLimit,
       condition: parsed.condition,
       planner: parsed.planner,
+      ...(parsed.model ? { model: parsed.model } : {}),
       surveyQueries: parsed.surveyQueries,
       ...(parsed.scriptedChange
         ? { scriptedChange: parsed.scriptedChange }
