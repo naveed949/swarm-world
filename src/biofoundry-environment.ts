@@ -37,22 +37,7 @@ export class BioFoundryEnvironment implements Environment<
     agentId: string;
     action: Action;
   }): EnvironmentResolution {
-    const agent = this.simulator.agents.find(
-      (candidate) => candidate.id === agentId,
-    );
-    if (!agent) throw new Error(`Unknown BioFoundry agent: ${agentId}`);
-    const before = this.simulator.trace.events.length;
-    this.simulator.resolveAction(agent, action);
-    const events = this.simulator.trace.events.slice(before);
-    const result = events.at(-1);
-    return {
-      accepted: result?.success ?? false,
-      ...(result?.targetId ? { targetId: result.targetId } : {}),
-      ...(!result?.success && typeof result?.data.reason === "string"
-        ? { reason: result.data.reason }
-        : {}),
-      evidenceIds: events.map((event) => event.id),
-    };
+    return this.simulator.resolveAgentAction(agentId, action);
   }
 
   advance(): void {

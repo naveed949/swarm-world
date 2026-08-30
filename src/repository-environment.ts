@@ -18,209 +18,43 @@ import {
   sep,
 } from "node:path";
 import { promisify } from "node:util";
+import { capabilities } from "./config.js";
 import type { Environment, EnvironmentResolution } from "./environment.js";
 import { sha256 } from "./hash.js";
+import { RepositoryTrace } from "./repository-trace.js";
+import type {
+  RepositoryAction,
+  RepositoryAgent,
+  RepositoryArtifact,
+  RepositoryEdge,
+  RepositoryEdgeType,
+  RepositoryEnvironmentConfig,
+  RepositoryEvaluation,
+  RepositoryEvidence as Evidence,
+  RepositoryFacility,
+  RepositoryFrozenSnapshot,
+  RepositoryNode,
+  RepositoryNodeType,
+  RepositoryObservation,
+  RepositoryRecipe as Recipe,
+} from "./repository-types.js";
+
+export type {
+  RepositoryAction,
+  RepositoryArtifact,
+  RepositoryEdge,
+  RepositoryEdgeType,
+  RepositoryEnvironmentConfig,
+  RepositoryEvaluation,
+  RepositoryFacility,
+  RepositoryFrozenSnapshot,
+  RepositoryNode,
+  RepositoryNodeType,
+  RepositoryObservation,
+  RepositoryTask,
+} from "./repository-types.js";
 
 const run = promisify(execFile);
-
-export type RepositoryNodeType =
-  | "task"
-  | "file"
-  | "symbol"
-  | "module"
-  | "test"
-  | "diagnostic"
-  | "facility"
-  | "pending_patch"
-  | "accepted_artifact";
-
-export type RepositoryEdgeType =
-  | "containment"
-  | "import"
-  | "call"
-  | "test_relation"
-  | "task_relevance"
-  | "ownership"
-  | "change_coupling"
-  | "artifact_ancestry";
-
-export interface RepositoryNode {
-  id: string;
-  type: RepositoryNodeType;
-  label: string;
-  path?: string;
-  contentHash?: string;
-}
-
-export interface RepositoryEdge {
-  from: string;
-  to: string;
-  type: RepositoryEdgeType;
-}
-
-export interface RepositoryTask {
-  id: string;
-  title: string;
-  acceptanceCriteria: string[];
-  relevantPaths: string[];
-  priority: number;
-}
-
-export interface RepositoryFacility {
-  id: string;
-  category:
-    "format" | "build" | "test" | "typecheck" | "lint" | "analysis" | "hidden";
-  executable: string;
-  args: string[];
-  timeoutMs: number;
-  outputLimit: number;
-  concurrency: number;
-  environment: Record<string, string>;
-  mandatory: boolean;
-}
-
-export interface RepositoryEnvironmentConfig {
-  root: string;
-  baseCommit: string;
-  readOnly?: boolean;
-  task: RepositoryTask;
-  observationRadius: number;
-  observationLimit: number;
-  allowedPaths: string[];
-  excludedPaths: string[];
-  patch: { maxFiles: number; maxChangedLines: number };
-  facilities: RepositoryFacility[];
-}
-
-export type RepositoryAction =
-  | { type: "WAIT" }
-  | { type: "FOCUS"; nodeId: string }
-  | { type: "INSPECT"; nodeId: string }
-  | { type: "SEARCH"; query: string; paths?: string[] }
-  | { type: "CLAIM_TASK"; taskId: string }
-  | {
-      type: "FORMULATE";
-      taskId: string;
-      evidenceIds: string[];
-      targets: string[];
-      requiredFacilities: string[];
-    }
-  | {
-      type: "EDIT";
-      recipeId: string;
-      path: string;
-      expectedContentHash: string;
-      content: string;
-    }
-  | { type: "RUN_CHECK"; recipeId: string; facilityId: string }
-  | { type: "CONSTRUCT_ARTIFACT"; recipeId: string }
-  | {
-      type: "PUBLISH_FINDING";
-      title: string;
-      body: string;
-      evidenceIds: string[];
-    }
-  | { type: "REQUEST_INTEGRATION"; artifactId: string };
-
-export interface RepositoryObservation {
-  revision: string;
-  focusNodeId: string;
-  nodes: RepositoryNode[];
-  edges: RepositoryEdge[];
-  ownedEvidenceIds: string[];
-  affordances: RepositoryAction["type"][];
-  budgets: {
-    context: number;
-    actions: number;
-    verification: number;
-    writes: number;
-  };
-}
-
-export interface RepositoryFrozenSnapshot {
-  candidateCommit: string;
-  baseCommit: string;
-  graphHash: string;
-  facilityPolicyHash: string;
-  traceHash: string;
-  acceptedArtifacts: RepositoryArtifact[];
-  task: RepositoryTask;
-}
-
-export interface RepositoryEvaluation {
-  outcome:
-    | "completed"
-    | "no eligible artifact"
-    | "needs clarification"
-    | "budget exhausted"
-    | "permission blocked"
-    | "conflict unresolved"
-    | "evaluation inconclusive";
-  revision: string;
-  hardGatesPassed: boolean;
-  checks: Array<{ facilityId: string; success: boolean; outputDigest: string }>;
-  correctness: number;
-  regressionSafety: number;
-  issueCoverage: number;
-  maintainability: number;
-  robustness: number;
-}
-
-interface RepositoryAgent {
-  id: string;
-  focusNodeId: string;
-  evidence: Set<string>;
-  actionsRemaining: number;
-  verificationRemaining: number;
-  writesRemaining: number;
-}
-
-interface Evidence {
-  id: string;
-  ownerId: string;
-  kind: string;
-  revision: string;
-  digest: string;
-  data: Record<string, unknown>;
-}
-
-interface Recipe {
-  id: string;
-  ownerId: string;
-  taskId: string;
-  evidenceIds: string[];
-  targets: string[];
-  requiredFacilities: string[];
-  worktree: string;
-  baseCommit: string;
-  patchHash: string;
-  checks: Map<string, string>;
-}
-
-interface RepositoryArtifact {
-  id: string;
-  commit: string;
-  baseCommit: string;
-  parentArtifacts: string[];
-  authorId: string;
-  contributors: string[];
-  taskIds: string[];
-  touchedNodes: string[];
-  patchHash: string;
-  evidenceIds: string[];
-  priority: number;
-}
-
-interface TraceEvent {
-  sequence: number;
-  type: string;
-  accepted: boolean;
-  actorId?: string;
-  targetId?: string;
-  data: Record<string, unknown>;
-  previousDigest: string;
-  digest: string;
-}
 
 function glob(pattern: string, path: string): boolean {
   const escaped = pattern
@@ -248,7 +82,13 @@ export class RepositoryEnvironment implements Environment<
   private readonly recipes = new Map<string, Recipe>();
   private readonly artifacts = new Map<string, RepositoryArtifact>();
   private readonly integrationQueue = new Set<string>();
-  private readonly events: TraceEvent[] = [];
+  private readonly integratedArtifactIds = new Set<string>();
+  private readonly taskClaims = new Map<string, string>();
+  private readonly messages: RepositoryObservation["messages"] = [];
+  private readonly findings: RepositoryObservation["findings"] = [];
+  private readonly facilityActive = new Map<string, number>();
+  private readonly facilityExecutableHashes = new Map<string, string>();
+  private readonly trace = new RepositoryTrace();
   private readonly nodes = new Map<string, RepositoryNode>();
   private readonly edges: RepositoryEdge[] = [];
   private readonly root: string;
@@ -317,6 +157,8 @@ export class RepositoryEnvironment implements Environment<
       id,
       focusNodeId: task.id,
       evidence: new Set(),
+      observedNodes: new Set([task.id]),
+      inheritedArtifacts: new Set(),
       actionsRemaining: 128,
       verificationRemaining: 32,
       writesRemaining: this.config.patch.maxChangedLines,
@@ -351,6 +193,8 @@ export class RepositoryEnvironment implements Environment<
       .sort((a, b) => a.id.localeCompare(b.id))
       .slice(0, this.config.observationLimit);
     const ids = new Set(nodes.map((node) => node.id));
+    for (const id of ids) agent.observedNodes.add(id);
+    const caps = capabilities(this.config.condition ?? "full");
     return {
       revision: this.candidateCommit,
       focusNodeId: agent.focusNodeId,
@@ -363,6 +207,20 @@ export class RepositoryEnvironment implements Environment<
           ),
         ),
       ownedEvidenceIds: [...agent.evidence].sort(),
+      taskClaims: caps.taskClaims
+        ? [...this.taskClaims]
+            .map(([taskId, claimedBy]) => ({ taskId, agentId: claimedBy }))
+            .sort((a, b) => a.taskId.localeCompare(b.taskId))
+        : [],
+      messages: caps.communication
+        ? structuredClone(
+            this.messages.filter((message) => message.recipientId === agent.id),
+          )
+        : [],
+      findings: caps.publication ? structuredClone(this.findings) : [],
+      inheritedArtifactIds: caps.crossAgentPrograms
+        ? [...agent.inheritedArtifacts].sort()
+        : [],
       affordances: this.affordances(),
       budgets: {
         context: this.config.observationLimit,
@@ -389,8 +247,20 @@ export class RepositoryEnvironment implements Environment<
         case "WAIT":
           return this.accept(agentId, action.type);
         case "FOCUS":
-          if (!this.nodes.has(action.nodeId))
-            return this.reject(agentId, action.type, "node not observed");
+          if (
+            !agent.observedNodes.has(action.nodeId) ||
+            !this.edges.some(
+              (edge) =>
+                (edge.from === agent.focusNodeId &&
+                  edge.to === action.nodeId) ||
+                (edge.to === agent.focusNodeId && edge.from === action.nodeId),
+            )
+          )
+            return this.reject(
+              agentId,
+              action.type,
+              "focus target is not on a visible graph relationship",
+            );
           agent.focusNodeId = action.nodeId;
           return this.accept(agentId, action.type, action.nodeId);
         case "INSPECT":
@@ -398,9 +268,54 @@ export class RepositoryEnvironment implements Environment<
         case "SEARCH":
           return this.search(agent, action.query, action.paths);
         case "CLAIM_TASK":
+          if (!capabilities(this.config.condition ?? "full").taskClaims)
+            return this.reject(
+              agentId,
+              action.type,
+              "task claims disabled by treatment",
+            );
           if (action.taskId !== this.config.task.id)
             return this.reject(agentId, action.type, "task unavailable");
+          if (
+            this.taskClaims.has(action.taskId) &&
+            this.taskClaims.get(action.taskId) !== agent.id
+          )
+            return this.reject(agentId, action.type, "task already claimed");
+          this.taskClaims.set(action.taskId, agent.id);
           return this.accept(agentId, action.type, action.taskId);
+        case "COMMUNICATE":
+          if (!capabilities(this.config.condition ?? "full").communication)
+            return this.reject(
+              agentId,
+              action.type,
+              "communication disabled by treatment",
+            );
+          if (!this.agents.has(action.recipientId))
+            return this.reject(agentId, action.type, "recipient unavailable");
+          this.messages.push({
+            senderId: agent.id,
+            recipientId: action.recipientId,
+            text: action.text.slice(0, 2_000),
+          });
+          return this.accept(agentId, action.type, action.recipientId);
+        case "TEACH_ARTIFACT": {
+          if (!capabilities(this.config.condition ?? "full").teaching)
+            return this.reject(
+              agentId,
+              action.type,
+              "teaching disabled by treatment",
+            );
+          const artifact = this.artifacts.get(action.artifactId);
+          const recipient = this.agents.get(action.recipientId);
+          if (!artifact || !recipient || artifact.authorId !== agent.id)
+            return this.reject(
+              agentId,
+              action.type,
+              "artifact is not teachable",
+            );
+          recipient.inheritedArtifacts.add(artifact.id);
+          return this.accept(agentId, action.type, recipient.id);
+        }
         case "FORMULATE":
           return await this.formulate(agent, action);
         case "EDIT":
@@ -410,18 +325,29 @@ export class RepositoryEnvironment implements Environment<
         case "CONSTRUCT_ARTIFACT":
           return await this.constructArtifact(agent, action.recipeId);
         case "PUBLISH_FINDING":
+          if (!capabilities(this.config.condition ?? "full").publication)
+            return this.reject(
+              agentId,
+              action.type,
+              "publication disabled by treatment",
+            );
           if (!this.owns(agent, action.evidenceIds))
             return this.reject(
               agentId,
               action.type,
               "publication cites unowned evidence",
             );
-          return this.accept(
-            agentId,
-            action.type,
-            `finding_${sha256(action).slice(0, 16)}`,
-            action.evidenceIds,
-          );
+          {
+            const id = `finding_${sha256({ agentId, action }).slice(0, 16)}`;
+            this.findings.push({
+              id,
+              authorId: agent.id,
+              title: action.title,
+              body: action.body,
+              evidenceIds: [...action.evidenceIds],
+            });
+            return this.accept(agentId, action.type, id, action.evidenceIds);
+          }
         case "REQUEST_INTEGRATION":
           if (!this.artifacts.has(action.artifactId))
             return this.reject(agentId, action.type, "artifact unavailable");
@@ -443,12 +369,14 @@ export class RepositoryEnvironment implements Environment<
       .sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
     for (const artifact of ordered) {
       try {
-        await run("git", [
-          "-C",
-          this.candidateWorktree,
-          "cherry-pick",
-          artifact.commit,
-        ]);
+        const commitDate = await this.commitDate(artifact.commit);
+        await run(
+          "git",
+          ["-C", this.candidateWorktree, "cherry-pick", artifact.commit],
+          {
+            env: { ...process.env, GIT_COMMITTER_DATE: commitDate },
+          },
+        );
         this.candidateCommit = (
           await run(
             "git",
@@ -456,6 +384,8 @@ export class RepositoryEnvironment implements Environment<
             { encoding: "utf8" },
           )
         ).stdout.trim();
+        this.integratedArtifactIds.add(artifact.id);
+        await this.refreshContentIdentities();
         this.record("artifact_integrated", true, undefined, artifact.id, {
           candidateCommit: this.candidateCommit,
         });
@@ -482,7 +412,9 @@ export class RepositoryEnvironment implements Environment<
       facilityPolicyHash: this.facilityPolicyHash(),
       traceHash: this.traceHash(),
       acceptedArtifacts: structuredClone(
-        [...this.artifacts.values()].sort((a, b) => a.id.localeCompare(b.id)),
+        [...this.artifacts.values()]
+          .filter((artifact) => this.integratedArtifactIds.has(artifact.id))
+          .sort((a, b) => a.id.localeCompare(b.id)),
       ),
       task: structuredClone(this.config.task),
     };
@@ -510,6 +442,13 @@ export class RepositoryEnvironment implements Environment<
           facilityId: facility.id,
           success: result.success,
           outputDigest: result.outputDigest,
+          revision: frozen.candidateCommit,
+          facilityPolicyHash: frozen.facilityPolicyHash,
+          executionEnvironment: sha256({
+            platform: process.platform,
+            architecture: process.arch,
+            node: process.version,
+          }),
         });
       }
     } finally {
@@ -532,28 +471,62 @@ export class RepositoryEnvironment implements Environment<
     const hasArtifact =
       frozen.acceptedArtifacts.length > 0 &&
       frozen.candidateCommit !== frozen.baseCommit;
+    const score = (categories: RepositoryFacility["category"][]) => {
+      const selected = this.config.facilities.filter((facility) =>
+        categories.includes(facility.category),
+      );
+      return selected.length
+        ? selected.filter(
+            (facility) =>
+              checks.find((check) => check.facilityId === facility.id)?.success,
+          ).length / selected.length
+        : 0;
+    };
+    const correctness = score(["test", "hidden"]);
+    const regressionSafety = mandatory.length
+      ? mandatory.filter(
+          (facility) =>
+            checks.find((check) => check.facilityId === facility.id)?.success,
+        ).length / mandatory.length
+      : 0;
+    const maintainability = score([
+      "format",
+      "build",
+      "typecheck",
+      "lint",
+      "analysis",
+    ]);
+    const hidden = this.config.facilities.filter(
+      (facility) => facility.category === "hidden",
+    );
+    const robustness = hidden.length ? score(["hidden"]) : 1;
+    const issueCoverage = hasArtifact
+      ? frozen.acceptedArtifacts.some((artifact) =>
+          artifact.taskIds.includes(frozen.task.id),
+        )
+        ? 1
+        : 0
+      : 0;
+    const completionEligible =
+      hardGatesPassed &&
+      hasArtifact &&
+      issueCoverage === 1 &&
+      correctness === 1 &&
+      frozen.task.acceptanceCriteria.length > 0;
     return {
-      outcome:
-        hardGatesPassed && hasArtifact
-          ? "completed"
-          : hasArtifact
-            ? "evaluation inconclusive"
-            : "no eligible artifact",
+      outcome: completionEligible
+        ? "completed"
+        : hasArtifact
+          ? "evaluation inconclusive"
+          : "no eligible artifact",
       revision: frozen.candidateCommit,
       hardGatesPassed,
       checks,
-      correctness: hardGatesPassed ? 1 : 0,
-      regressionSafety: hardGatesPassed ? 1 : 0,
-      issueCoverage: hardGatesPassed && hasArtifact ? 1 : 0,
-      maintainability: hardGatesPassed ? 1 : 0,
-      robustness: this.config.facilities
-        .filter((facility) => facility.category === "hidden")
-        .every(
-          (facility) =>
-            checks.find((check) => check.facilityId === facility.id)?.success,
-        )
-        ? 1
-        : 0,
+      correctness,
+      regressionSafety,
+      issueCoverage,
+      maintainability,
+      robustness,
     };
   }
 
@@ -571,6 +544,21 @@ export class RepositoryEnvironment implements Environment<
       )
     )
       throw new Error("Facility executables must use fixed absolute paths");
+    for (const facility of this.config.facilities) {
+      if (
+        isAbsolute(facility.workingDirectory) ||
+        facility.workingDirectory.split(/[\\/]/).includes("..") ||
+        !facility.permittedPaths.length ||
+        facility.concurrency < 1 ||
+        facility.timeoutMs < 1 ||
+        facility.outputLimit < 1
+      )
+        throw new Error(`Invalid facility policy: ${facility.id}`);
+      this.facilityExecutableHashes.set(
+        facility.id,
+        sha256((await readFile(facility.executable)).toString("base64")),
+      );
+    }
     const status = (
       await run(
         "git",
@@ -648,7 +636,10 @@ export class RepositoryEnvironment implements Environment<
       }
     }
     for (const facility of this.config.facilities)
-      this.node("facility", facility.id, facility.id);
+      if (facility.category !== "hidden") {
+        const node = this.node("facility", facility.id, facility.id);
+        this.edge(taskNode.id, node.id, "task_relevance");
+      }
   }
 
   private resolveImport(
@@ -672,11 +663,10 @@ export class RepositoryEnvironment implements Environment<
     nodeId: string,
   ): Promise<EnvironmentResolution> {
     const node = this.nodes.get(nodeId);
-    if (!node) return this.reject(agent.id, "INSPECT", "node not observed");
+    if (!node || !agent.observedNodes.has(nodeId))
+      return this.reject(agent.id, "INSPECT", "node not observed");
     const content = node.path
-      ? await this.gitShow(this.candidateCommit, node.path).catch(() =>
-          this.gitShow(this.baseCommit, node.path!),
-        )
+      ? await this.gitShow(this.candidateCommit, node.path)
       : JSON.stringify(node);
     const evidence = this.makeEvidence(
       agent.id,
@@ -715,6 +705,9 @@ export class RepositoryEnvironment implements Environment<
           results.push({ path, line: index + 1, text });
       });
     }
+    for (const result of results)
+      for (const node of this.nodes.values())
+        if (node.path === result.path) agent.observedNodes.add(node.id);
     const evidence = this.makeEvidence(
       agent.id,
       "search",
@@ -742,6 +735,12 @@ export class RepositoryEnvironment implements Environment<
       );
     if (
       action.targets.some((path) => !this.permitted(path)) ||
+      action.targets.some(
+        (path) =>
+          ![...agent.observedNodes].some(
+            (nodeId) => this.nodes.get(nodeId)?.path === path,
+          ),
+      ) ||
       action.targets.length > this.config.patch.maxFiles
     )
       return this.reject(
@@ -751,7 +750,10 @@ export class RepositoryEnvironment implements Environment<
       );
     if (
       action.requiredFacilities.some(
-        (id) => !this.config.facilities.some((facility) => facility.id === id),
+        (id) =>
+          !this.config.facilities.some(
+            (facility) => facility.id === id && facility.category !== "hidden",
+          ),
       )
     )
       return this.reject(
@@ -842,22 +844,75 @@ export class RepositoryEnvironment implements Environment<
         "RUN_CHECK",
         "patch or facility unavailable",
       );
+    if (facility.category === "hidden")
+      return this.reject(
+        agent.id,
+        "RUN_CHECK",
+        "hidden evaluation facilities are unavailable during discovery",
+      );
+    if (
+      recipe.targets.some(
+        (path) =>
+          !facility.permittedPaths.some((pattern) => glob(pattern, path)),
+      )
+    )
+      return this.reject(
+        agent.id,
+        "RUN_CHECK",
+        "patch targets are outside facility path scope",
+      );
+    if ((this.facilityActive.get(facility.id) ?? 0) >= facility.concurrency)
+      return this.reject(agent.id, "RUN_CHECK", "facility capacity exhausted");
     if (agent.verificationRemaining <= 0)
       return this.reject(agent.id, "RUN_CHECK", "budget exhausted");
     agent.verificationRemaining--;
-    const result = await this.executeFacility(facility, recipe.worktree);
+    this.facilityActive.set(
+      facility.id,
+      (this.facilityActive.get(facility.id) ?? 0) + 1,
+    );
+    const result = await this.executeFacility(
+      facility,
+      recipe.worktree,
+    ).finally(() =>
+      this.facilityActive.set(
+        facility.id,
+        (this.facilityActive.get(facility.id) ?? 1) - 1,
+      ),
+    );
+    const revisionIdentity = sha256({
+      baseCommit: recipe.baseCommit,
+      patchHash: recipe.patchHash,
+    });
     const evidence = this.makeEvidence(
       agent.id,
       "facility_result",
-      recipe.patchHash,
+      revisionIdentity,
       {
         facilityId,
         patchHash: recipe.patchHash,
+        baseCommit: recipe.baseCommit,
+        facilityPolicyHash: this.facilityPolicyHash(),
+        executionEnvironment: {
+          platform: process.platform,
+          architecture: process.arch,
+          node: process.version,
+        },
+        eventSequence: this.trace.length,
         ...result,
       },
       result.outputDigest,
     );
     if (result.success) recipe.checks.set(facilityId, evidence.id);
+    else {
+      const diagnostic = this.node(
+        "diagnostic",
+        evidence.id,
+        `${facility.id} failed`,
+        undefined,
+        result.outputDigest,
+      );
+      this.edge(recipe.id, diagnostic.id, "containment");
+    }
     const resolution = result.success
       ? this.accept(agent.id, "RUN_CHECK", facilityId, [evidence.id])
       : this.reject(agent.id, "RUN_CHECK", "configured check failed", [
@@ -881,7 +936,9 @@ export class RepositoryEnvironment implements Environment<
         "patch identity changed or is empty",
       );
     const mandatory = this.config.facilities
-      .filter((facility) => facility.mandatory)
+      .filter(
+        (facility) => facility.mandatory && facility.category !== "hidden",
+      )
       .map((facility) => facility.id);
     if (
       mandatory.some((id) => !recipe.checks.has(id)) ||
@@ -893,13 +950,22 @@ export class RepositoryEnvironment implements Environment<
         "mandatory checks are missing or stale",
       );
     await run("git", ["-C", recipe.worktree, "add", "--", ...recipe.targets]);
-    await run("git", [
-      "-C",
-      recipe.worktree,
-      "commit",
-      "-m",
-      `Fix ${recipe.taskId}`,
-    ]);
+    const commitDate = await this.commitDate(recipe.baseCommit);
+    await run(
+      "git",
+      ["-C", recipe.worktree, "commit", "-m", `Fix ${recipe.taskId}`],
+      {
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: agent.id,
+          GIT_AUTHOR_EMAIL: `${agent.id}@swarm-world.invalid`,
+          GIT_AUTHOR_DATE: commitDate,
+          GIT_COMMITTER_NAME: "SwarmWorld Engine",
+          GIT_COMMITTER_EMAIL: "engine@swarm-world.invalid",
+          GIT_COMMITTER_DATE: commitDate,
+        },
+      },
+    );
     const commit = (
       await run("git", ["-C", recipe.worktree, "rev-parse", "HEAD"], {
         encoding: "utf8",
@@ -954,13 +1020,18 @@ export class RepositoryEnvironment implements Environment<
 
   private async executeFacility(
     facility: RepositoryFacility,
-    cwd: string,
+    worktree: string,
   ): Promise<{
     success: boolean;
     exitCode: number;
     outputDigest: string;
     output: string;
   }> {
+    const cwd = resolve(worktree, facility.workingDirectory);
+    const relativeCwd = relative(worktree, cwd);
+    if (relativeCwd === ".." || relativeCwd.startsWith(`..${sep}`))
+      throw new Error("Facility working directory escapes its worktree");
+    const before = await this.workspaceStateHash(worktree);
     try {
       const result = await run(facility.executable, facility.args, {
         cwd,
@@ -973,11 +1044,19 @@ export class RepositoryEnvironment implements Environment<
         0,
         facility.outputLimit,
       );
+      const mutated =
+        facility.mutationClass === "none" &&
+        before !== (await this.workspaceStateHash(worktree));
       return {
-        success: true,
-        exitCode: 0,
+        success: !mutated,
+        exitCode: mutated ? 126 : 0,
         outputDigest: sha256(output),
-        output,
+        output: mutated
+          ? `${output}\nFacility violated its no-mutation policy`.slice(
+              0,
+              facility.outputLimit,
+            )
+          : output,
       };
     } catch (error) {
       const value = error as {
@@ -1001,13 +1080,16 @@ export class RepositoryEnvironment implements Environment<
   }
 
   private affordances(): RepositoryAction["type"][] {
+    const caps = capabilities(this.config.condition ?? "full");
     const read: RepositoryAction["type"][] = [
       "WAIT",
       "FOCUS",
       "INSPECT",
       "SEARCH",
-      "CLAIM_TASK",
-      "PUBLISH_FINDING",
+      ...(caps.taskClaims ? (["CLAIM_TASK"] as const) : []),
+      ...(caps.communication ? (["COMMUNICATE"] as const) : []),
+      ...(caps.teaching ? (["TEACH_ARTIFACT"] as const) : []),
+      ...(caps.publication ? (["PUBLISH_FINDING"] as const) : []),
     ];
     return (this.config.readOnly ?? true)
       ? read
@@ -1091,6 +1173,30 @@ export class RepositoryEnvironment implements Environment<
     ).stdout;
   }
 
+  private async commitDate(revision: string): Promise<string> {
+    return (
+      await run(
+        "git",
+        ["-C", this.root, "show", "-s", "--format=%aI", revision],
+        {
+          encoding: "utf8",
+        },
+      )
+    ).stdout.trim();
+  }
+
+  private async refreshContentIdentities(): Promise<void> {
+    for (const node of this.nodes.values())
+      if (node.path && (node.type === "file" || node.type === "test")) {
+        const content = await this.gitShow(
+          this.candidateCommit,
+          node.path,
+        ).catch(() => undefined);
+        if (content === undefined) delete node.contentHash;
+        else node.contentHash = sha256(content);
+      }
+  }
+
   private async patchHash(worktree: string): Promise<string> {
     const output = (
       await run("git", ["-C", worktree, "diff", "--binary", "HEAD"], {
@@ -1099,6 +1205,17 @@ export class RepositoryEnvironment implements Environment<
       })
     ).stdout;
     return sha256(output);
+  }
+
+  private async workspaceStateHash(worktree: string): Promise<string> {
+    const status = (
+      await run(
+        "git",
+        ["-C", worktree, "status", "--porcelain=v1", "--untracked-files=all"],
+        { encoding: "utf8" },
+      )
+    ).stdout;
+    return sha256({ status, patchHash: await this.patchHash(worktree) });
   }
 
   private async diffStats(
@@ -1140,7 +1257,7 @@ export class RepositoryEnvironment implements Environment<
     data: Record<string, unknown>,
     digest: string,
   ): Evidence {
-    const id = `evidence_${sha256({ ownerId, kind, revision, data, digest, sequence: this.events.length }).slice(0, 24)}`;
+    const id = `evidence_${sha256({ ownerId, kind, revision, data, digest, sequence: this.trace.length }).slice(0, 24)}`;
     const evidence = { id, ownerId, kind, revision, digest, data };
     this.evidence.set(id, evidence);
     this.agent(ownerId).evidence.add(id);
@@ -1180,17 +1297,7 @@ export class RepositoryEnvironment implements Environment<
     targetId: string | undefined,
     data: Record<string, unknown>,
   ): void {
-    const previousDigest = this.events.at(-1)?.digest ?? "genesis";
-    const base = {
-      sequence: this.events.length,
-      type,
-      accepted,
-      ...(actorId ? { actorId } : {}),
-      ...(targetId ? { targetId } : {}),
-      data,
-      previousDigest,
-    };
-    this.events.push({ ...base, digest: sha256(base) });
+    this.trace.append(type, accepted, actorId, targetId, data);
   }
 
   private graphHash(): string {
@@ -1207,12 +1314,15 @@ export class RepositoryEnvironment implements Environment<
   private facilityPolicyHash(): string {
     return sha256(
       this.config.facilities
-        .map((facility) => ({ ...facility }))
+        .map((facility) => ({
+          ...facility,
+          executableContentHash: this.facilityExecutableHashes.get(facility.id),
+        }))
         .sort((a, b) => a.id.localeCompare(b.id)),
     );
   }
 
   private traceHash(): string {
-    return this.events.at(-1)?.digest ?? "genesis";
+    return this.trace.hash();
   }
 }

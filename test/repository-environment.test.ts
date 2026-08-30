@@ -8,6 +8,8 @@ import {
   RepositoryEnvironment,
   type RepositoryEnvironmentConfig,
 } from "../src/repository-environment.js";
+import { runRepositoryExperiment } from "../src/repository-experiment.js";
+import { loadRunConfig } from "../src/run-config.js";
 
 function fixture(readOnly = true): RepositoryEnvironmentConfig {
   const root = mkdtempSync(join(tmpdir(), "swarm-world-repository-"));
@@ -56,6 +58,9 @@ function fixture(readOnly = true): RepositoryEnvironmentConfig {
         category: "test",
         executable: process.execPath,
         args: ["--experimental-strip-types", "math.test.ts"],
+        workingDirectory: ".",
+        permittedPaths: ["**/*.ts"],
+        mutationClass: "none",
         timeoutMs: 2_000,
         outputLimit: 2_000,
         concurrency: 1,
@@ -77,10 +82,68 @@ describe("RepositoryEnvironment", () => {
     expect(second).toEqual(first);
     expect(first.nodes.length).toBeLessThanOrEqual(12);
     expect(first.nodes.map((node) => node.type)).toContain("task");
+    expect(first.nodes.map((node) => node.type)).toContain("facility");
     expect(first.nodes.map((node) => node.path)).not.toContain(".env");
     expect(first.edges.some((edge) => edge.type === "test_relation")).toBe(
       true,
     );
+  });
+
+  it("allows focus movement only across visible graph relationships", async () => {
+    const environment = await RepositoryEnvironment.create(fixture());
+    const agent = environment.createAgent("agent-1");
+    const observation = await environment.observe({ agentId: agent.id });
+    const file = observation.nodes.find((node) => node.path === "math.ts")!;
+    const facility = observation.nodes.find(
+      (node) => node.type === "facility",
+    )!;
+
+    expect(
+      await environment.resolve({
+        agentId: agent.id,
+        action: { type: "FOCUS", nodeId: file.id },
+      }),
+    ).toMatchObject({ accepted: true });
+    expect(
+      await environment.resolve({
+        agentId: agent.id,
+        action: { type: "FOCUS", nodeId: facility.id },
+      }),
+    ).toMatchObject({
+      accepted: false,
+      reason: "focus target is not on a visible graph relationship",
+    });
+  });
+
+  it("enforces treatment capabilities and exclusive authoritative claims", async () => {
+    const disabled = await RepositoryEnvironment.create({
+      ...fixture(),
+      condition: "no-communication",
+    });
+    const disabledAgent = disabled.createAgent("agent-1");
+    disabled.createAgent("agent-2");
+    const observation = await disabled.observe({ agentId: disabledAgent.id });
+    expect(observation.affordances).not.toContain("COMMUNICATE");
+    expect(
+      await disabled.resolve({
+        agentId: disabledAgent.id,
+        action: { type: "CLAIM_TASK", taskId: "bug-add" },
+      }),
+    ).toMatchObject({ accepted: false });
+
+    const enabled = await RepositoryEnvironment.create(fixture());
+    const first = enabled.createAgent("agent-1");
+    const second = enabled.createAgent("agent-2");
+    await enabled.resolve({
+      agentId: first.id,
+      action: { type: "CLAIM_TASK", taskId: "bug-add" },
+    });
+    expect(
+      await enabled.resolve({
+        agentId: second.id,
+        action: { type: "CLAIM_TASK", taskId: "bug-add" },
+      }),
+    ).toMatchObject({ accepted: false, reason: "task already claimed" });
   });
 
   it("records inspections as owned evidence and rejects writes in dry-run mode", async () => {
@@ -234,6 +297,83 @@ describe("RepositoryEnvironment", () => {
     expect(artifact).toMatchObject({
       accepted: false,
       reason: "mandatory checks are missing or stale",
+    });
+  });
+
+  it("withholds hidden facilities from discovery and rejects direct execution", async () => {
+    const config = fixture(false);
+    config.facilities.push({
+      ...config.facilities[0]!,
+      id: "hidden-regression",
+      category: "hidden",
+      mandatory: true,
+    });
+    const environment = await RepositoryEnvironment.create(config);
+    const agent = environment.createAgent("agent-1");
+    const observation = await environment.observe({ agentId: agent.id });
+    const file = observation.nodes.find((node) => node.path === "math.ts")!;
+    expect(observation.nodes.map((node) => node.label)).not.toContain(
+      "hidden-regression",
+    );
+    const inspected = await environment.resolve({
+      agentId: agent.id,
+      action: { type: "INSPECT", nodeId: file.id },
+    });
+    const recipe = await environment.resolve({
+      agentId: agent.id,
+      action: {
+        type: "FORMULATE",
+        taskId: "bug-add",
+        evidenceIds: inspected.evidenceIds,
+        targets: ["math.ts"],
+        requiredFacilities: ["acceptance"],
+      },
+    });
+
+    expect(
+      await environment.resolve({
+        agentId: agent.id,
+        action: {
+          type: "RUN_CHECK",
+          recipeId: recipe.targetId!,
+          facilityId: "hidden-regression",
+        },
+      }),
+    ).toMatchObject({
+      accepted: false,
+      reason: "hidden evaluation facilities are unavailable during discovery",
+    });
+  });
+
+  it("selects repository runs from configuration and reports incomplete dry runs honestly", async () => {
+    const environment = fixture();
+    const directory = mkdtempSync(join(tmpdir(), "swarm-world-run-config-"));
+    const path = join(directory, "repository.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        seed: 17,
+        population: 1,
+        ticks: 1,
+        macroturnInterval: 1,
+        planLimit: 1,
+        condition: "full",
+        environment: { type: "repository", ...environment },
+      }),
+    );
+
+    const loaded = await loadRunConfig(path);
+    expect(loaded.type).toBe("repository");
+    if (loaded.type !== "repository") throw new Error("wrong run type");
+    const result = await runRepositoryExperiment(
+      loaded.config,
+      join(directory, "runs"),
+    );
+
+    expect(result.summary).toMatchObject({
+      outcome: "no eligible artifact",
+      baseCommit: environment.baseCommit,
+      candidateCommit: environment.baseCommit,
     });
   });
 });
