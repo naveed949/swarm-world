@@ -87,9 +87,16 @@ program
         .slice(1)
         .filter((line) => line.recordType === "scheduler")
         .map((line) => line.event);
+      const unknownRecords = lines
+        .slice(1)
+        .filter(
+          (line) =>
+            line.recordType !== "environment" &&
+            line.recordType !== "scheduler",
+        );
       const actual = sha256({ schedulerEvents, environmentEvents });
       const expected = manifest.summary.traceHash;
-      const valid = actual === expected;
+      const valid = unknownRecords.length === 0 && actual === expected;
       process.stdout.write(
         `${JSON.stringify({ valid, expected, actual, events: environmentEvents.length + schedulerEvents.length }, null, 2)}\n`,
       );

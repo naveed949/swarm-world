@@ -54,6 +54,7 @@ export interface RepositoryFacility {
   workingDirectory: string;
   permittedPaths: string[];
   mutationClass: "none" | "worktree";
+  sandbox?: { executable: string; args: string[] };
   timeoutMs: number;
   outputLimit: number;
   concurrency: number;

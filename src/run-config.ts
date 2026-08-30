@@ -39,6 +39,9 @@ const facilitySchema = z.object({
   workingDirectory: z.string().default("."),
   permittedPaths: z.array(z.string()).min(1),
   mutationClass: z.enum(["none", "worktree"]).default("none"),
+  sandbox: z
+    .object({ executable: z.string().min(1), args: z.array(z.string()) })
+    .optional(),
   timeoutMs: z.number().int().positive(),
   outputLimit: z.number().int().positive(),
   concurrency: z.number().int().positive().default(1),

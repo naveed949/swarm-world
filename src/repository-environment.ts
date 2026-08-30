@@ -88,6 +88,7 @@ export class RepositoryEnvironment implements Environment<
   private readonly findings: RepositoryObservation["findings"] = [];
   private readonly facilityActive = new Map<string, number>();
   private readonly facilityExecutableHashes = new Map<string, string>();
+  private readonly facilitySandboxHashes = new Map<string, string>();
   private readonly trace = new RepositoryTrace();
   private readonly nodes = new Map<string, RepositoryNode>();
   private readonly edges: RepositoryEdge[] = [];
@@ -569,6 +570,9 @@ export class RepositoryEnvironment implements Environment<
     )
       throw new Error("Facility executables must use fixed absolute paths");
     for (const facility of this.config.facilities) {
+      const isNodeFacility =
+        (await realpath(facility.executable)) ===
+        (await realpath(process.execPath));
       if (
         isAbsolute(facility.workingDirectory) ||
         facility.workingDirectory.split(/[\\/]/).includes("..") ||
@@ -578,10 +582,24 @@ export class RepositoryEnvironment implements Environment<
         facility.outputLimit < 1
       )
         throw new Error(`Invalid facility policy: ${facility.id}`);
+      if (
+        !isNodeFacility &&
+        (!facility.sandbox || !isAbsolute(facility.sandbox.executable))
+      )
+        throw new Error(
+          `Non-Node facility requires an absolute sandbox wrapper: ${facility.id}`,
+        );
       this.facilityExecutableHashes.set(
         facility.id,
         sha256((await readFile(facility.executable)).toString("base64")),
       );
+      if (facility.sandbox)
+        this.facilitySandboxHashes.set(
+          facility.id,
+          sha256(
+            (await readFile(facility.sandbox.executable)).toString("base64"),
+          ),
+        );
     }
     const status = (
       await run(
@@ -1069,8 +1087,24 @@ export class RepositoryEnvironment implements Environment<
       );
     const before = await this.workspaceStateHash(worktree);
     const pathsBefore = await this.changedPaths(worktree);
+    const isNodeFacility =
+      (await realpath(facility.executable)) ===
+      (await realpath(process.execPath));
+    const executable = isNodeFacility
+      ? facility.executable
+      : facility.sandbox!.executable;
+    const args = isNodeFacility
+      ? [
+          "--permission",
+          `--allow-fs-read=${canonicalWorktree}`,
+          ...(facility.mutationClass === "worktree"
+            ? [`--allow-fs-write=${canonicalWorktree}`]
+            : []),
+          ...facility.args,
+        ]
+      : [...facility.sandbox!.args, facility.executable, ...facility.args];
     try {
-      const result = await run(facility.executable, facility.args, {
+      const result = await run(executable, args, {
         cwd,
         timeout: facility.timeoutMs,
         maxBuffer: Math.max(facility.outputLimit, 1),
@@ -1392,6 +1426,7 @@ export class RepositoryEnvironment implements Environment<
         .map((facility) => ({
           ...facility,
           executableContentHash: this.facilityExecutableHashes.get(facility.id),
+          sandboxContentHash: this.facilitySandboxHashes.get(facility.id),
         }))
         .sort((a, b) => a.id.localeCompare(b.id)),
     );
