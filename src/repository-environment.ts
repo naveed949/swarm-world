@@ -166,6 +166,10 @@ export class RepositoryEnvironment implements Environment<
     return { id };
   }
 
+  traceEvents() {
+    return this.trace.snapshot();
+  }
+
   async observe({
     agentId,
   }: {
@@ -482,13 +486,12 @@ export class RepositoryEnvironment implements Environment<
           ).length / selected.length
         : 0;
     };
-    const correctness = score(["test", "hidden"]);
-    const regressionSafety = mandatory.length
-      ? mandatory.filter(
-          (facility) =>
-            checks.find((check) => check.facilityId === facility.id)?.success,
-        ).length / mandatory.length
-      : 0;
+    const gateScore = (ids: string[]) =>
+      ids.filter(
+        (id) => checks.find((check) => check.facilityId === id)?.success,
+      ).length / ids.length;
+    const correctness = gateScore(frozen.task.acceptanceFacilityIds);
+    const regressionSafety = gateScore(frozen.task.regressionFacilityIds);
     const maintainability = score([
       "format",
       "build",
@@ -501,8 +504,13 @@ export class RepositoryEnvironment implements Environment<
     );
     const robustness = hidden.length ? score(["hidden"]) : 1;
     const issueCoverage = hasArtifact
-      ? frozen.acceptedArtifacts.some((artifact) =>
-          artifact.taskIds.includes(frozen.task.id),
+      ? frozen.acceptedArtifacts.some(
+          (artifact) =>
+            artifact.taskIds.includes(frozen.task.id) &&
+            artifact.touchedNodes.some((nodeId) => {
+              const path = this.nodes.get(nodeId)?.path;
+              return path ? frozen.task.relevantPaths.includes(path) : false;
+            }),
         )
         ? 1
         : 0
@@ -512,7 +520,7 @@ export class RepositoryEnvironment implements Environment<
       hasArtifact &&
       issueCoverage === 1 &&
       correctness === 1 &&
-      frozen.task.acceptanceCriteria.length > 0;
+      regressionSafety === 1;
     return {
       outcome: completionEligible
         ? "completed"
@@ -538,6 +546,22 @@ export class RepositoryEnvironment implements Environment<
     const ids = this.config.facilities.map((facility) => facility.id);
     if (new Set(ids).size !== ids.length)
       throw new Error("Facility IDs must be unique");
+    const declaredTaskFacilities = [
+      ...this.config.task.acceptanceFacilityIds,
+      ...this.config.task.regressionFacilityIds,
+    ];
+    if (
+      declaredTaskFacilities.some((id) => !ids.includes(id)) ||
+      this.config.task.acceptanceFacilityIds.some(
+        (id) =>
+          !this.config.facilities.some(
+            (facility) =>
+              facility.id === id &&
+              (facility.category === "test" || facility.category === "hidden"),
+          ),
+      )
+    )
+      throw new Error("Task gates must reference configured test facilities");
     if (
       this.config.facilities.some(
         (facility) => !isAbsolute(facility.executable),
@@ -870,6 +894,12 @@ export class RepositoryEnvironment implements Environment<
       facility.id,
       (this.facilityActive.get(facility.id) ?? 0) + 1,
     );
+    await run("git", ["-C", recipe.worktree, "add", "--", ...recipe.targets]);
+    const treeHash = (
+      await run("git", ["-C", recipe.worktree, "write-tree"], {
+        encoding: "utf8",
+      })
+    ).stdout.trim();
     const result = await this.executeFacility(
       facility,
       recipe.worktree,
@@ -879,18 +909,15 @@ export class RepositoryEnvironment implements Environment<
         (this.facilityActive.get(facility.id) ?? 1) - 1,
       ),
     );
-    const revisionIdentity = sha256({
-      baseCommit: recipe.baseCommit,
-      patchHash: recipe.patchHash,
-    });
     const evidence = this.makeEvidence(
       agent.id,
       "facility_result",
-      revisionIdentity,
+      treeHash,
       {
         facilityId,
         patchHash: recipe.patchHash,
         baseCommit: recipe.baseCommit,
+        treeHash,
         facilityPolicyHash: this.facilityPolicyHash(),
         executionEnvironment: {
           platform: process.platform,
@@ -1027,11 +1054,21 @@ export class RepositoryEnvironment implements Environment<
     outputDigest: string;
     output: string;
   }> {
-    const cwd = resolve(worktree, facility.workingDirectory);
-    const relativeCwd = relative(worktree, cwd);
+    const canonicalWorktree = await realpath(worktree);
+    const cwd = resolve(canonicalWorktree, facility.workingDirectory);
+    const relativeCwd = relative(canonicalWorktree, cwd);
     if (relativeCwd === ".." || relativeCwd.startsWith(`..${sep}`))
       throw new Error("Facility working directory escapes its worktree");
+    const realCwd = await realpath(cwd);
+    if (
+      relative(canonicalWorktree, realCwd) === ".." ||
+      relative(canonicalWorktree, realCwd).startsWith(`..${sep}`)
+    )
+      throw new Error(
+        "Facility working directory resolves outside its worktree",
+      );
     const before = await this.workspaceStateHash(worktree);
+    const pathsBefore = await this.changedPaths(worktree);
     try {
       const result = await run(facility.executable, facility.args, {
         cwd,
@@ -1047,16 +1084,24 @@ export class RepositoryEnvironment implements Environment<
       const mutated =
         facility.mutationClass === "none" &&
         before !== (await this.workspaceStateHash(worktree));
+      const pathsAfter = await this.changedPaths(worktree);
+      const outOfScope = pathsAfter.some(
+        (path) =>
+          !pathsBefore.includes(path) &&
+          !facility.permittedPaths.some((pattern) => glob(pattern, path)),
+      );
+      const policyViolation = mutated || outOfScope;
+      const boundedOutput = policyViolation
+        ? `${output}\nFacility violated its mutation or path policy`.slice(
+            0,
+            facility.outputLimit,
+          )
+        : output;
       return {
-        success: !mutated,
-        exitCode: mutated ? 126 : 0,
-        outputDigest: sha256(output),
-        output: mutated
-          ? `${output}\nFacility violated its no-mutation policy`.slice(
-              0,
-              facility.outputLimit,
-            )
-          : output,
+        success: !policyViolation,
+        exitCode: policyViolation ? 126 : 0,
+        outputDigest: sha256(boundedOutput),
+        output: boundedOutput,
       };
     } catch (error) {
       const value = error as {
@@ -1149,13 +1194,28 @@ export class RepositoryEnvironment implements Environment<
     path: string,
   ): Promise<string> {
     if (!this.permitted(path)) throw new Error("path policy rejected edit");
-    const target = resolve(worktree, path);
+    const canonicalWorktree = await realpath(worktree);
+    const target = resolve(canonicalWorktree, path);
     if (
-      relative(worktree, target).startsWith(`..${sep}`) ||
-      relative(worktree, target) === ".."
+      relative(canonicalWorktree, target).startsWith(`..${sep}`) ||
+      relative(canonicalWorktree, target) === ".."
     )
       throw new Error("path escapes worktree");
+    let cursor = canonicalWorktree;
+    for (const segment of path.split("/").slice(0, -1)) {
+      cursor = join(cursor, segment);
+      const entry = await lstat(cursor).catch(() => undefined);
+      if (entry?.isSymbolicLink())
+        throw new Error("symlink parent paths are forbidden");
+      if (!entry) break;
+    }
     await mkdir(dirname(target), { recursive: true });
+    const realParent = await realpath(dirname(target));
+    if (
+      relative(canonicalWorktree, realParent) === ".." ||
+      relative(canonicalWorktree, realParent).startsWith(`..${sep}`)
+    )
+      throw new Error("edit parent resolves outside worktree");
     const existing = await lstat(target).catch(() => undefined);
     if (existing?.isSymbolicLink())
       throw new Error("symlink edits are forbidden");
@@ -1216,6 +1276,21 @@ export class RepositoryEnvironment implements Environment<
       )
     ).stdout;
     return sha256({ status, patchHash: await this.patchHash(worktree) });
+  }
+
+  private async changedPaths(worktree: string): Promise<string[]> {
+    const status = (
+      await run(
+        "git",
+        ["-C", worktree, "status", "--porcelain=v1", "--untracked-files=all"],
+        { encoding: "utf8" },
+      )
+    ).stdout;
+    return status
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => line.slice(3).split(" -> ").at(-1)!)
+      .sort();
   }
 
   private async diffStats(

@@ -44,6 +44,8 @@ function fixture(readOnly = true): RepositoryEnvironmentConfig {
       id: "bug-add",
       title: "add subtracts",
       acceptanceCriteria: ["add(2, 1) returns 3"],
+      acceptanceFacilityIds: ["acceptance"],
+      regressionFacilityIds: ["acceptance"],
       relevantPaths: ["math.ts", "math.test.ts"],
       priority: 1,
     },
@@ -375,5 +377,39 @@ describe("RepositoryEnvironment", () => {
       baseCommit: environment.baseCommit,
       candidateCommit: environment.baseCommit,
     });
+    const records = readFileSync(result.tracePath, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(records.some((record) => record.recordType === "environment")).toBe(
+      true,
+    );
+    expect(records.some((record) => record.recordType === "scheduler")).toBe(
+      true,
+    );
+  });
+
+  it("runs independent-search agents in separate repository worlds", async () => {
+    const environment = fixture();
+    const directory = mkdtempSync(join(tmpdir(), "swarm-world-independent-"));
+    const result = await runRepositoryExperiment(
+      {
+        seed: 19,
+        population: 2,
+        ticks: 1,
+        macroturnInterval: 1,
+        planLimit: 1,
+        condition: "independent",
+        environment: { ...environment, condition: "independent" },
+      },
+      directory,
+      { plan: async () => [{ type: "WAIT" }] },
+    );
+
+    expect(result.summary.memberCandidateCommits).toEqual([
+      environment.baseCommit,
+      environment.baseCommit,
+    ]);
+    expect(result.summary.memberTraceHashes).toHaveLength(2);
   });
 });

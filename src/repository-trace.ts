@@ -34,4 +34,8 @@ export class RepositoryTrace {
   hash(): string {
     return this.events.at(-1)?.digest ?? "genesis";
   }
+
+  snapshot(): RepositoryTraceEvent[] {
+    return structuredClone(this.events);
+  }
 }

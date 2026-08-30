@@ -78,6 +78,24 @@ program
     const manifest = lines[0];
     if (manifest?.type !== "manifest")
       throw new Error("Trace does not begin with a manifest");
+    if (manifest.environmentType === "repository") {
+      const environmentEvents = lines
+        .slice(1)
+        .filter((line) => line.recordType === "environment")
+        .map((line) => line.event);
+      const schedulerEvents = lines
+        .slice(1)
+        .filter((line) => line.recordType === "scheduler")
+        .map((line) => line.event);
+      const actual = sha256({ schedulerEvents, environmentEvents });
+      const expected = manifest.summary.traceHash;
+      const valid = actual === expected;
+      process.stdout.write(
+        `${JSON.stringify({ valid, expected, actual, events: environmentEvents.length + schedulerEvents.length }, null, 2)}\n`,
+      );
+      if (!valid) process.exitCode = 1;
+      return;
+    }
     const events = lines.slice(1).map((line) => line.event);
     const hash = sha256({
       config: manifest.config,

@@ -28,6 +28,7 @@ export class EnvironmentSimulator<Observation, Action, Frozen, Evaluation> {
   tick = 0;
   readonly events: Array<EnvironmentSimulatorEvent<Action>> = [];
   private readonly queues = new Map<string, Action[]>();
+  private readonly orderedAgentIds: string[];
   private previousDigest = "genesis";
 
   constructor(
@@ -38,19 +39,18 @@ export class EnvironmentSimulator<Observation, Action, Frozen, Evaluation> {
   ) {
     if (config.macroturnInterval < 1 || config.planLimit < 1)
       throw new Error("Simulator scheduling limits must be positive");
-    for (const id of [...agentIds].sort()) this.queues.set(id, []);
+    this.orderedAgentIds = [...agentIds].sort();
+    for (const id of this.orderedAgentIds) this.queues.set(id, []);
   }
 
   async step(): Promise<void> {
     if (this.planner) {
-      const due = [...this.agentIds]
-        .sort()
-        .filter(
-          (_, index) =>
-            (this.tick - (index % this.config.macroturnInterval)) %
-              this.config.macroturnInterval ===
-            0,
-        );
+      const due = this.orderedAgentIds.filter(
+        (_, index) =>
+          (this.tick - (index % this.config.macroturnInterval)) %
+            this.config.macroturnInterval ===
+          0,
+      );
       const proposals = await Promise.all(
         due.map(async (agentId) => ({
           agentId,
@@ -67,7 +67,7 @@ export class EnvironmentSimulator<Observation, Action, Frozen, Evaluation> {
           proposal.actions.slice(0, this.config.planLimit),
         );
     }
-    for (const agentId of [...this.agentIds].sort()) {
+    for (const agentId of this.orderedAgentIds) {
       const action = this.queues.get(agentId)?.shift();
       if (action === undefined) continue;
       const resolution = await this.environment.resolve({ agentId, action });

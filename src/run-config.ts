@@ -64,6 +64,8 @@ const repositoryRunSchema = z.object({
       id: z.string().min(1),
       title: z.string().min(1),
       acceptanceCriteria: z.array(z.string().min(1)).min(1),
+      acceptanceFacilityIds: z.array(z.string().min(1)).min(1),
+      regressionFacilityIds: z.array(z.string().min(1)).min(1),
       relevantPaths: z.array(z.string()).min(1),
       priority: z.number().int().default(0),
     }),

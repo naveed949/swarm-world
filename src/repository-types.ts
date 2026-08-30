@@ -39,6 +39,8 @@ export interface RepositoryTask {
   id: string;
   title: string;
   acceptanceCriteria: string[];
+  acceptanceFacilityIds: string[];
+  regressionFacilityIds: string[];
   relevantPaths: string[];
   priority: number;
 }
