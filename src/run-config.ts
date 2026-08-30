@@ -16,8 +16,14 @@ export interface RepositoryRunConfig {
   macroturnInterval: number;
   planLimit: number;
   condition: Condition;
-  planner?: "wait" | "survey";
+  planner?: "wait" | "survey" | "scripted";
   surveyQueries?: string[];
+  scriptedChange?: {
+    targetPath: string;
+    oldText: string;
+    newText: string;
+    requiredFacilityIds: string[];
+  };
   environment: RepositoryEnvironmentConfig;
 }
 
@@ -51,42 +57,90 @@ const facilitySchema = z.object({
   mandatory: z.boolean().default(false),
 });
 
-const repositoryRunSchema = z.object({
-  seed: z.number().int().default(3201),
-  population: z.number().int().positive().default(1),
-  ticks: z.number().int().positive().default(1),
-  macroturnInterval: z.number().int().positive().default(1),
-  planLimit: z.number().int().positive().max(32).default(8),
-  condition: z
-    .enum(["full", "no-communication", "no-explicit-culture", "independent"])
-    .default("full"),
-  planner: z.enum(["wait", "survey"]).default("wait"),
-  surveyQueries: z.array(z.string().min(1).max(256)).default([]),
-  environment: z.object({
-    type: z.literal("repository"),
-    root: z.string().min(1),
-    baseCommit: z.string().min(1),
-    readOnly: z.boolean().default(true),
-    task: z.object({
-      id: z.string().min(1),
-      title: z.string().min(1),
-      acceptanceCriteria: z.array(z.string().min(1)).min(1),
-      acceptanceFacilityIds: z.array(z.string().min(1)).min(1),
-      regressionFacilityIds: z.array(z.string().min(1)).min(1),
-      relevantPaths: z.array(z.string()).min(1),
-      priority: z.number().int().default(0),
+const repositoryRunSchema = z
+  .object({
+    seed: z.number().int().default(3201),
+    population: z.number().int().positive().default(1),
+    ticks: z.number().int().positive().default(1),
+    macroturnInterval: z.number().int().positive().default(1),
+    planLimit: z.number().int().positive().max(32).default(8),
+    condition: z
+      .enum(["full", "no-communication", "no-explicit-culture", "independent"])
+      .default("full"),
+    planner: z.enum(["wait", "survey", "scripted"]).default("wait"),
+    surveyQueries: z.array(z.string().min(1).max(256)).default([]),
+    scriptedChange: z
+      .object({
+        targetPath: z.string().min(1),
+        oldText: z.string().min(1),
+        newText: z.string(),
+        requiredFacilityIds: z.array(z.string().min(1)).min(1),
+      })
+      .optional(),
+    environment: z.object({
+      type: z.literal("repository"),
+      root: z.string().min(1),
+      baseCommit: z.string().min(1),
+      readOnly: z.boolean().default(true),
+      task: z.object({
+        id: z.string().min(1),
+        title: z.string().min(1),
+        acceptanceCriteria: z.array(z.string().min(1)).min(1),
+        acceptanceFacilityIds: z.array(z.string().min(1)).min(1),
+        regressionFacilityIds: z.array(z.string().min(1)).min(1),
+        relevantPaths: z.array(z.string()).min(1),
+        priority: z.number().int().default(0),
+      }),
+      observationRadius: z.number().int().nonnegative().default(2),
+      observationLimit: z.number().int().positive().default(64),
+      allowedPaths: z.array(z.string()).min(1),
+      excludedPaths: z.array(z.string()).default([]),
+      patch: z.object({
+        maxFiles: z.number().int().positive(),
+        maxChangedLines: z.number().int().positive(),
+      }),
+      facilities: z.array(facilitySchema).min(1),
     }),
-    observationRadius: z.number().int().nonnegative().default(2),
-    observationLimit: z.number().int().positive().default(64),
-    allowedPaths: z.array(z.string()).min(1),
-    excludedPaths: z.array(z.string()).default([]),
-    patch: z.object({
-      maxFiles: z.number().int().positive(),
-      maxChangedLines: z.number().int().positive(),
-    }),
-    facilities: z.array(facilitySchema).min(1),
-  }),
-});
+  })
+  .superRefine((config, context) => {
+    if (config.planner !== "scripted") return;
+    if (!config.scriptedChange)
+      context.addIssue({
+        code: "custom",
+        message: "Scripted planner requires scriptedChange",
+        path: ["scriptedChange"],
+      });
+    if (config.environment.readOnly)
+      context.addIssue({
+        code: "custom",
+        message: "Scripted planner requires writable repository mode",
+        path: ["environment", "readOnly"],
+      });
+    if (
+      config.scriptedChange &&
+      !config.environment.task.relevantPaths.includes(
+        config.scriptedChange.targetPath,
+      )
+    )
+      context.addIssue({
+        code: "custom",
+        message: "Scripted target must be task-relevant",
+        path: ["scriptedChange", "targetPath"],
+      });
+    if (
+      config.scriptedChange?.requiredFacilityIds.some(
+        (id) =>
+          !config.environment.facilities.some(
+            (facility) => facility.id === id && facility.category !== "hidden",
+          ),
+      )
+    )
+      context.addIssue({
+        code: "custom",
+        message: "Scripted checks must reference visible facilities",
+        path: ["scriptedChange", "requiredFacilityIds"],
+      });
+  });
 
 export async function loadRunConfig(path: string): Promise<RunConfig> {
   const source = YAML.parse(await readFile(path, "utf8")) as unknown;
@@ -114,6 +168,9 @@ export async function loadRunConfig(path: string): Promise<RunConfig> {
       condition: parsed.condition,
       planner: parsed.planner,
       surveyQueries: parsed.surveyQueries,
+      ...(parsed.scriptedChange
+        ? { scriptedChange: parsed.scriptedChange }
+        : {}),
       environment: {
         ...environment,
         root: resolve(dirname(path), environment.root),

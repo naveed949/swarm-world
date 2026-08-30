@@ -107,6 +107,14 @@ sh scripts/run-repository-container.sh \
 
 Do not mount credentials or the Docker socket into this runner. Docker narrows the blast radius but does not make untrusted code risk-free; use a disposable Docker context or VM for stronger host isolation.
 
+After reviewing the survey output, run the bounded writable demonstration:
+
+```bash
+npm run example:sandcastle:write
+```
+
+This uses a scripted, operator-owned change specification to add the explicit issue repository to Sandcastle's example environment. The host checkout remains read-only. The container may change only `.sandcastle/.env.example` in its ephemeral clone, must pass the fixed `env-contract` facility, and retains `artifact.patch` plus `artifact.mbox` for review. It does not push to Sandcastle.
+
 The public repository lifecycle is:
 
 1. Create an agent and observe its stable, bounded graph neighborhood.

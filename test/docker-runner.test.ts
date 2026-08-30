@@ -37,4 +37,16 @@ describe("repository container runner", () => {
     expect(config).toContain("readOnly: true");
     expect(config).toContain("planner: survey");
   });
+
+  it("bounds the writable Sandcastle example to one non-secret file", () => {
+    const config = readFileSync(
+      "examples/repository/sandcastle-write.yaml",
+      "utf8",
+    );
+
+    expect(config).toContain("planner: scripted");
+    expect(config).toContain("targetPath: .sandcastle/.env.example");
+    expect(config).toContain("maxFiles: 1");
+    expect(config).toContain("ISSUE_REPOSITORY=naveed949/sandcastle");
+  });
 });

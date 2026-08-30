@@ -98,6 +98,14 @@ export type RepositoryAction =
       expectedContentHash: string;
       content: string;
     }
+  | {
+      type: "EDIT_REPLACE";
+      recipeId: string;
+      path: string;
+      expectedContentHash: string;
+      oldText: string;
+      newText: string;
+    }
   | { type: "RUN_CHECK"; recipeId: string; facilityId: string }
   | { type: "CONSTRUCT_ARTIFACT"; recipeId: string }
   | {
@@ -114,6 +122,8 @@ export interface RepositoryObservation {
   nodes: RepositoryNode[];
   edges: RepositoryEdge[];
   ownedEvidenceIds: string[];
+  ownedRecipeIds: string[];
+  ownedArtifactIds: string[];
   taskClaims: Array<{ taskId: string; agentId: string }>;
   messages: Array<{ senderId: string; recipientId: string; text: string }>;
   findings: Array<{

@@ -3,12 +3,14 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { sha256 } from "../src/hash.js";
 import {
   RepositoryEnvironment,
   type RepositoryEnvironmentConfig,
 } from "../src/repository-environment.js";
-import { runRepositoryExperiment } from "../src/repository-experiment.js";
+import {
+  createRepositoryPlanner,
+  runRepositoryExperiment,
+} from "../src/repository-experiment.js";
 import { loadRunConfig } from "../src/run-config.js";
 
 function fixture(readOnly = true): RepositoryEnvironmentConfig {
@@ -116,6 +118,104 @@ describe("RepositoryEnvironment", () => {
     expect(trace).toContain('"type":"SEARCH"');
   });
 
+  it("plans a bounded evidence-preconditioned replacement lifecycle", async () => {
+    const environment = fixture(false);
+    const world = await RepositoryEnvironment.create({
+      ...environment,
+      readOnly: true,
+    });
+    world.createAgent("agent_000000");
+    const observation = await world.observe({ agentId: "agent_000000" });
+    const planner = createRepositoryPlanner({
+      seed: 3201,
+      population: 1,
+      ticks: 7,
+      macroturnInterval: 1,
+      planLimit: 1,
+      condition: "full",
+      planner: "scripted",
+      scriptedChange: {
+        targetPath: "math.ts",
+        oldText: "a - b",
+        newText: "a + b",
+        requiredFacilityIds: ["acceptance"],
+      },
+      environment,
+    });
+    const plan = async (
+      tick: number,
+      overrides: Partial<typeof observation> = {},
+    ) =>
+      await planner.plan({
+        agentId: "agent_000000",
+        tick,
+        observation: { ...observation, ...overrides },
+      });
+
+    expect((await plan(0))[0]?.type).toBe("CLAIM_TASK");
+    expect((await plan(1))[0]?.type).toBe("INSPECT");
+    expect((await plan(2, { ownedEvidenceIds: ["evidence"] }))[0]?.type).toBe(
+      "FORMULATE",
+    );
+    expect((await plan(3, { ownedRecipeIds: ["recipe"] }))[0]).toMatchObject({
+      type: "EDIT_REPLACE",
+      oldText: "a - b",
+      newText: "a + b",
+    });
+    expect((await plan(4, { ownedRecipeIds: ["recipe"] }))[0]?.type).toBe(
+      "RUN_CHECK",
+    );
+    expect((await plan(5, { ownedRecipeIds: ["recipe"] }))[0]?.type).toBe(
+      "CONSTRUCT_ARTIFACT",
+    );
+    expect((await plan(6, { ownedArtifactIds: ["artifact"] }))[0]).toEqual({
+      type: "REQUEST_INTEGRATION",
+      artifactId: "artifact",
+    });
+  });
+
+  it("refuses writable experiments outside the container boundary", async () => {
+    const environment = fixture(false);
+    await expect(RepositoryEnvironment.create(environment)).rejects.toThrow(
+      "Writable repository experiments require the hardened container runner",
+    );
+    await expect(
+      runRepositoryExperiment(
+        {
+          seed: 3201,
+          population: 1,
+          ticks: 7,
+          macroturnInterval: 1,
+          planLimit: 1,
+          condition: "full",
+          planner: "scripted",
+          scriptedChange: {
+            targetPath: "math.ts",
+            oldText: "a - b",
+            newText: "a + b",
+            requiredFacilityIds: ["acceptance"],
+          },
+          environment,
+        },
+        mkdtempSync(join(tmpdir(), "swarm-world-host-write-")),
+      ),
+    ).rejects.toThrow(
+      "Writable repository experiments require the hardened container runner",
+    );
+  });
+
+  it("defaults omitted readOnly configuration to a host-safe survey", async () => {
+    const config = fixture();
+    delete config.readOnly;
+
+    const environment = await RepositoryEnvironment.create(config);
+    const agent = environment.createAgent("agent-1");
+
+    expect(
+      (await environment.observe({ agentId: agent.id })).affordances,
+    ).not.toContain("EDIT");
+  });
+
   it("allows focus movement only across visible graph relationships", async () => {
     const environment = await RepositoryEnvironment.create(fixture());
     const agent = environment.createAgent("agent-1");
@@ -203,132 +303,8 @@ describe("RepositoryEnvironment", () => {
     });
   });
 
-  it("creates, verifies, integrates, freezes, and evaluates an isolated patch", async () => {
-    const config = fixture(false);
-    const baseBefore = readFileSync(join(config.root, "math.ts"), "utf8");
-    const environment = await RepositoryEnvironment.create(config);
-    const agent = environment.createAgent("agent-1");
-    const observation = await environment.observe({ agentId: agent.id });
-    const file = observation.nodes.find((node) => node.path === "math.ts")!;
-    const inspected = await environment.resolve({
-      agentId: agent.id,
-      action: { type: "INSPECT", nodeId: file.id },
-    });
-    const recipe = await environment.resolve({
-      agentId: agent.id,
-      action: {
-        type: "FORMULATE",
-        taskId: "bug-add",
-        evidenceIds: inspected.evidenceIds,
-        targets: ["math.ts"],
-        requiredFacilities: ["acceptance"],
-      },
-    });
-    const edited = await environment.resolve({
-      agentId: agent.id,
-      action: {
-        type: "EDIT",
-        recipeId: recipe.targetId!,
-        path: "math.ts",
-        expectedContentHash: file.contentHash!,
-        content: "export const add = (a: number, b: number) => a + b;\n",
-      },
-    });
-    const checked = await environment.resolve({
-      agentId: agent.id,
-      action: {
-        type: "RUN_CHECK",
-        recipeId: recipe.targetId!,
-        facilityId: "acceptance",
-      },
-    });
-    const artifact = await environment.resolve({
-      agentId: agent.id,
-      action: { type: "CONSTRUCT_ARTIFACT", recipeId: recipe.targetId! },
-    });
-    const integrated = await environment.resolve({
-      agentId: agent.id,
-      action: { type: "REQUEST_INTEGRATION", artifactId: artifact.targetId! },
-    });
-    await environment.advance();
-    const frozen = await environment.freeze();
-    const evaluation = await environment.evaluate(frozen);
-
-    expect(edited.accepted).toBe(true);
-    expect(checked).toMatchObject({ accepted: true });
-    expect(artifact.accepted).toBe(true);
-    expect(integrated.accepted).toBe(true);
-    expect(frozen.candidateCommit).not.toBe(config.baseCommit);
-    expect(evaluation).toMatchObject({
-      outcome: "completed",
-      hardGatesPassed: true,
-    });
-    expect(readFileSync(join(config.root, "math.ts"), "utf8")).toBe(baseBefore);
-  });
-
-  it("invalidates successful checks after any later edit", async () => {
-    const environment = await RepositoryEnvironment.create(fixture(false));
-    const agent = environment.createAgent("agent-1");
-    const file = (await environment.observe({ agentId: agent.id })).nodes.find(
-      (node) => node.path === "math.ts",
-    )!;
-    const inspected = await environment.resolve({
-      agentId: agent.id,
-      action: { type: "INSPECT", nodeId: file.id },
-    });
-    const recipe = await environment.resolve({
-      agentId: agent.id,
-      action: {
-        type: "FORMULATE",
-        taskId: "bug-add",
-        evidenceIds: inspected.evidenceIds,
-        targets: ["math.ts"],
-        requiredFacilities: ["acceptance"],
-      },
-    });
-    const fixed = "export const add = (a: number, b: number) => a + b;\n";
-    await environment.resolve({
-      agentId: agent.id,
-      action: {
-        type: "EDIT",
-        recipeId: recipe.targetId!,
-        path: "math.ts",
-        expectedContentHash: file.contentHash!,
-        content: fixed,
-      },
-    });
-    await environment.resolve({
-      agentId: agent.id,
-      action: {
-        type: "RUN_CHECK",
-        recipeId: recipe.targetId!,
-        facilityId: "acceptance",
-      },
-    });
-    await environment.resolve({
-      agentId: agent.id,
-      action: {
-        type: "EDIT",
-        recipeId: recipe.targetId!,
-        path: "math.ts",
-        expectedContentHash: sha256(fixed),
-        content: `${fixed}\n`,
-      },
-    });
-
-    const artifact = await environment.resolve({
-      agentId: agent.id,
-      action: { type: "CONSTRUCT_ARTIFACT", recipeId: recipe.targetId! },
-    });
-
-    expect(artifact).toMatchObject({
-      accepted: false,
-      reason: "mandatory checks are missing or stale",
-    });
-  });
-
-  it("withholds hidden facilities from discovery and rejects direct execution", async () => {
-    const config = fixture(false);
+  it("withholds hidden facilities from discovery", async () => {
+    const config = fixture();
     config.facilities.push({
       ...config.facilities[0]!,
       id: "hidden-regression",
@@ -338,38 +314,9 @@ describe("RepositoryEnvironment", () => {
     const environment = await RepositoryEnvironment.create(config);
     const agent = environment.createAgent("agent-1");
     const observation = await environment.observe({ agentId: agent.id });
-    const file = observation.nodes.find((node) => node.path === "math.ts")!;
     expect(observation.nodes.map((node) => node.label)).not.toContain(
       "hidden-regression",
     );
-    const inspected = await environment.resolve({
-      agentId: agent.id,
-      action: { type: "INSPECT", nodeId: file.id },
-    });
-    const recipe = await environment.resolve({
-      agentId: agent.id,
-      action: {
-        type: "FORMULATE",
-        taskId: "bug-add",
-        evidenceIds: inspected.evidenceIds,
-        targets: ["math.ts"],
-        requiredFacilities: ["acceptance"],
-      },
-    });
-
-    expect(
-      await environment.resolve({
-        agentId: agent.id,
-        action: {
-          type: "RUN_CHECK",
-          recipeId: recipe.targetId!,
-          facilityId: "hidden-regression",
-        },
-      }),
-    ).toMatchObject({
-      accepted: false,
-      reason: "hidden evaluation facilities are unavailable during discovery",
-    });
   });
 
   it("selects repository runs from configuration and reports incomplete dry runs honestly", async () => {

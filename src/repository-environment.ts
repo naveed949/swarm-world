@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import {
+  access,
   lstat,
   mkdir,
   mkdtemp,
@@ -109,6 +110,20 @@ export class RepositoryEnvironment implements Environment<
     config: RepositoryEnvironmentConfig,
   ): Promise<RepositoryEnvironment> {
     const root = await realpath(config.root);
+    const readOnly = config.readOnly ?? true;
+    if (!readOnly) {
+      const dockerBoundary =
+        process.platform === "linux" &&
+        root === "/workspace/target" &&
+        (await access("/.dockerenv").then(
+          () => true,
+          () => false,
+        ));
+      if (!dockerBoundary)
+        throw new Error(
+          "Writable repository experiments require the hardened container runner",
+        );
+    }
     const top = (
       await run("git", ["-C", root, "rev-parse", "--show-toplevel"], {
         encoding: "utf8",
@@ -128,7 +143,7 @@ export class RepositoryEnvironment implements Environment<
     const environment = new RepositoryEnvironment(config, root, baseCommit);
     await environment.validateConfiguration();
     await environment.buildGraph();
-    if (!config.readOnly) {
+    if (!readOnly) {
       const parent = await mkdtemp(join(tmpdir(), "swarm-world-candidate-"));
       environment.candidateWorktree = join(parent, "checkout");
       await run("git", [
@@ -212,6 +227,14 @@ export class RepositoryEnvironment implements Environment<
           ),
         ),
       ownedEvidenceIds: [...agent.evidence].sort(),
+      ownedRecipeIds: [...this.recipes.values()]
+        .filter((recipe) => recipe.ownerId === agent.id)
+        .map((recipe) => recipe.id)
+        .sort(),
+      ownedArtifactIds: [...this.artifacts.values()]
+        .filter((artifact) => artifact.authorId === agent.id)
+        .map((artifact) => artifact.id)
+        .sort(),
       taskClaims: caps.taskClaims
         ? [...this.taskClaims]
             .map(([taskId, claimedBy]) => ({ taskId, agentId: claimedBy }))
@@ -325,6 +348,40 @@ export class RepositoryEnvironment implements Environment<
           return await this.formulate(agent, action);
         case "EDIT":
           return await this.edit(agent, action);
+        case "EDIT_REPLACE": {
+          const recipe = this.recipes.get(action.recipeId);
+          if (
+            !recipe ||
+            recipe.ownerId !== agent.id ||
+            !recipe.targets.includes(action.path)
+          )
+            return this.reject(agent.id, action.type, "patch unavailable");
+          const current = await readFile(
+            await this.safeWorktreePath(recipe.worktree, action.path),
+            "utf8",
+          );
+          if (
+            !action.oldText ||
+            action.oldText === action.newText ||
+            current.split(action.oldText).length !== 2
+          )
+            return this.reject(
+              agent.id,
+              action.type,
+              "replacement must match exactly once",
+            );
+          return await this.edit(
+            agent,
+            {
+              type: "EDIT",
+              recipeId: action.recipeId,
+              path: action.path,
+              expectedContentHash: action.expectedContentHash,
+              content: current.replace(action.oldText, action.newText),
+            },
+            "EDIT_REPLACE",
+          );
+        }
         case "RUN_CHECK":
           return await this.runCheck(agent, action.recipeId, action.facilityId);
         case "CONSTRUCT_ARTIFACT":
@@ -379,7 +436,12 @@ export class RepositoryEnvironment implements Environment<
           "git",
           ["-C", this.candidateWorktree, "cherry-pick", artifact.commit],
           {
-            env: { ...process.env, GIT_COMMITTER_DATE: commitDate },
+            env: {
+              ...process.env,
+              GIT_COMMITTER_NAME: "SwarmWorld Engine",
+              GIT_COMMITTER_EMAIL: "engine@swarm-world.invalid",
+              GIT_COMMITTER_DATE: commitDate,
+            },
           },
         );
         this.candidateCommit = (
@@ -539,6 +601,42 @@ export class RepositoryEnvironment implements Environment<
     };
   }
 
+  async artifactPatch(frozen: RepositoryFrozenSnapshot): Promise<string> {
+    if (frozen.candidateCommit === frozen.baseCommit) return "";
+    return (
+      await run(
+        "git",
+        [
+          "-C",
+          this.root,
+          "diff",
+          "--binary",
+          frozen.baseCommit,
+          frozen.candidateCommit,
+        ],
+        { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 },
+      )
+    ).stdout;
+  }
+
+  async artifactMailbox(frozen: RepositoryFrozenSnapshot): Promise<string> {
+    if (frozen.candidateCommit === frozen.baseCommit) return "";
+    return (
+      await run(
+        "git",
+        [
+          "-C",
+          this.root,
+          "format-patch",
+          "--stdout",
+          "--binary",
+          `${frozen.baseCommit}..${frozen.candidateCommit}`,
+        ],
+        { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 },
+      )
+    ).stdout;
+  }
+
   private async validateConfiguration(): Promise<void> {
     if (this.config.observationRadius < 0 || this.config.observationLimit < 1)
       throw new Error("Invalid observation policy");
@@ -613,7 +711,7 @@ export class RepositoryEnvironment implements Environment<
       .filter(Boolean)
       .map((line) => line.slice(3))
       .filter((path) => !this.excluded(path));
-    if (!this.config.readOnly && unsafeDirty.length)
+    if (!(this.config.readOnly ?? true) && unsafeDirty.length)
       throw new Error("Writable repository runs require a clean base checkout");
   }
 
@@ -834,20 +932,21 @@ export class RepositoryEnvironment implements Environment<
   private async edit(
     agent: RepositoryAgent,
     action: Extract<RepositoryAction, { type: "EDIT" }>,
+    actionType: "EDIT" | "EDIT_REPLACE" = "EDIT",
   ): Promise<EnvironmentResolution> {
     if (this.config.readOnly ?? true)
-      return this.reject(agent.id, action.type, "permission blocked");
+      return this.reject(agent.id, actionType, "permission blocked");
     const recipe = this.recipes.get(action.recipeId);
     if (
       !recipe ||
       recipe.ownerId !== agent.id ||
       !recipe.targets.includes(action.path)
     )
-      return this.reject(agent.id, action.type, "patch or target unavailable");
+      return this.reject(agent.id, actionType, "patch or target unavailable");
     const target = await this.safeWorktreePath(recipe.worktree, action.path);
     const current = await readFile(target, "utf8");
     if (sha256(current) !== action.expectedContentHash)
-      return this.reject(agent.id, action.type, "stale content precondition");
+      return this.reject(agent.id, actionType, "stale content precondition");
     await writeFile(target, action.content, "utf8");
     const stats = await this.diffStats(recipe.worktree);
     if (
@@ -856,7 +955,7 @@ export class RepositoryEnvironment implements Environment<
       stats.lines > agent.writesRemaining
     ) {
       await writeFile(target, current, "utf8");
-      return this.reject(agent.id, action.type, "patch budget exceeded");
+      return this.reject(agent.id, actionType, "patch budget exceeded");
     }
     agent.writesRemaining = this.config.patch.maxChangedLines - stats.lines;
     recipe.patchHash = await this.patchHash(recipe.worktree);
@@ -868,7 +967,7 @@ export class RepositoryEnvironment implements Environment<
       { path: action.path, patchHash: recipe.patchHash },
       sha256(action.content),
     );
-    return this.accept(agent.id, action.type, recipe.id, [evidence.id]);
+    return this.accept(agent.id, actionType, recipe.id, [evidence.id]);
   }
 
   private async runCheck(
@@ -1176,6 +1275,7 @@ export class RepositoryEnvironment implements Environment<
           ...read,
           "FORMULATE",
           "EDIT",
+          "EDIT_REPLACE",
           "RUN_CHECK",
           "CONSTRUCT_ARTIFACT",
           "REQUEST_INTEGRATION",
