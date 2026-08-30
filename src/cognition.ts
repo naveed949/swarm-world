@@ -1,6 +1,6 @@
 import { Agent } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
-import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
 import type {
   Action,
@@ -134,15 +134,23 @@ const specSchema = z
       .strict(),
   })
   .strict();
-const actionSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("WAIT") }).strict(),
+const moveSchema = z.union([
   z
-    .object({
-      type: z.literal("MOVE"),
-      dx: z.union([z.literal(-1), z.literal(0), z.literal(1)]),
-      dy: z.union([z.literal(-1), z.literal(0), z.literal(1)]),
-    })
+    .object({ type: z.literal("MOVE"), dx: z.literal(-1), dy: z.literal(0) })
     .strict(),
+  z
+    .object({ type: z.literal("MOVE"), dx: z.literal(1), dy: z.literal(0) })
+    .strict(),
+  z
+    .object({ type: z.literal("MOVE"), dx: z.literal(0), dy: z.literal(-1) })
+    .strict(),
+  z
+    .object({ type: z.literal("MOVE"), dx: z.literal(0), dy: z.literal(1) })
+    .strict(),
+]);
+const actionSchema = z.union([
+  z.object({ type: z.literal("WAIT") }).strict(),
+  moveSchema,
   z
     .object({
       type: z.literal("INSPECT"),
@@ -248,22 +256,58 @@ const planSchema = z
   .object({ research: researchSchema, actions: z.array(actionSchema).max(12) })
   .strict();
 
+export function parseAgentPlan(value: unknown): AgentPlan {
+  return planSchema.parse(value) as AgentPlan;
+}
+
+export function planToolParameters() {
+  return Type.Unsafe<AgentPlan>(
+    structuredClone(z.toJSONSchema(planSchema)) as Record<string, unknown>,
+  );
+}
+
 const SYSTEM_PROMPT = `You are one initially homogeneous researcher embodied in a persistent, materially constrained world. No role is assigned to you. Develop bio-inspired material systems for environmental resilience through local exploration, grounded experiments, construction, and optional collaboration.
 
 You only know the supplied local observation, private research state, retrieved evidence, and treatment-permitted records. Textual claims never change physics. Never invent possession, observations, evidence IDs, artifact IDs, batch IDs, or program IDs. You must call submit_plan exactly once. The plan contains research (goal, hypothesis, progress, nextCheckpoint, collaborationNeed) and a bounded sequence of atomic actions. The simulator validates every consequence and may reject actions. Controllers are data: straight-line instructions over registers 0-15 using CONST, SENSOR, COPY, ADD, SUB, MUL, MIN, MAX, GT, LT, ACT. They have no loops, jumps, strings-as-code, files, network, or shell access.
 
 Prefer falsifiable local experiments and durable useful work. You receive no global reward, evaluator formula, predefined recipe, technology catalog, or assigned occupation.`;
 
+export function piStreamOptions(
+  config: ExperimentConfig,
+  options: Parameters<ModelRuntime["streamSimple"]>[2],
+) {
+  return {
+    ...options,
+    toolChoice: "required" as const,
+    ...(config.model.provider === "openai-codex"
+      ? { transport: "sse" as const }
+      : { temperature: config.model.temperature }),
+    maxTokens: 4096,
+    ...(config.model.reasoning === "off"
+      ? {}
+      : { reasoning: config.model.reasoning }),
+  };
+}
+
 export class PiCognition implements Cognition {
-  private models = builtinModels();
-  constructor(private readonly config: ExperimentConfig) {}
+  private runtimePromise: Promise<ModelRuntime> | undefined;
+  constructor(
+    private readonly config: ExperimentConfig,
+    private readonly createRuntime: () => Promise<ModelRuntime> = () =>
+      ModelRuntime.create(),
+  ) {}
+  private getRuntime(): Promise<ModelRuntime> {
+    this.runtimePromise ??= this.createRuntime();
+    return this.runtimePromise;
+  }
   async plan(
     agentState: AgentState,
     observation: LocalObservation,
     capabilities: Capabilities,
     signal?: AbortSignal,
   ): Promise<AgentPlan> {
-    const model = this.models.getModel(
+    const runtime = await this.getRuntime();
+    const model = runtime.getModel(
       this.config.model.provider,
       this.config.model.id,
     );
@@ -277,9 +321,7 @@ export class PiCognition implements Cognition {
       label: "Submit Plan",
       description:
         "Commit one schema-constrained research-state update and bounded atomic action plan.",
-      parameters: Type.Unsafe<AgentPlan>(
-        z.toJSONSchema(planSchema) as Record<string, unknown>,
-      ),
+      parameters: planToolParameters(),
       constrainedSampling: {
         type: "json_schema" as const,
         strict: "prefer" as const,
@@ -307,14 +349,15 @@ export class PiCognition implements Cognition {
         messages: [],
       },
       streamFn: (activeModel, context, options) =>
-        this.models.streamSimple(activeModel, context, {
-          ...options,
-          temperature: this.config.model.temperature,
-          maxTokens: 4096,
-          ...(this.config.model.reasoning === "off"
-            ? {}
-            : { reasoning: this.config.model.reasoning }),
-        }),
+        runtime.streamSimple(
+          activeModel,
+          context,
+          // Pi 0.84.4's Codex adapter supports "required", but the shared
+          // SimpleStreamOptions ToolChoice type still only lists auto/none.
+          piStreamOptions(this.config, options) as unknown as Parameters<
+            ModelRuntime["streamSimple"]
+          >[2],
+        ),
       sessionId: `swarmworld-${agentState.id}`,
     });
     if (signal?.aborted) throw signal.reason;
@@ -329,9 +372,12 @@ export class PiCognition implements Cognition {
       recentMemory: agentState.memory.slice(-32),
     };
     await agent.prompt(JSON.stringify(context));
+    const lastMessage = agent.state.messages.at(-1);
+    if (lastMessage?.role === "assistant" && lastMessage.stopReason === "error")
+      throw new Error(lastMessage.errorMessage ?? "Pi model request failed");
     try {
       if (!submitted) throw new Error("Model did not call submit_plan");
-      const parsed = planSchema.parse(submitted);
+      const parsed = parseAgentPlan(submitted);
       return {
         research: parsed.research,
         actions: parsed.actions.slice(0, this.config.planLimit) as Action[],

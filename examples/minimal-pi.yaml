@@ -1,10 +1,10 @@
 seed: 3201
-population: 8
-ticks: 160
+population: 2
+ticks: 20
 macroturnInterval: 10
-planLimit: 12
+planLimit: 6
 condition: full
-cognition: heuristic
+cognition: pi
 model:
   provider: openai-codex
   id: gpt-5.6-luna
@@ -15,10 +15,10 @@ world:
   height: 27
   observationRadius: 5
   inventoryLimit: 8
-  disturbanceInterval: 32
+  disturbanceInterval: 16
   disturbanceIntensity: 0.5
   scenarioPackage: ../worlds/biofoundry/scenario.yaml
 evaluation:
-  checkpoints: [80, 160]
-  ticks: 96
-  seeds: [9201, 9202]
+  checkpoints: [20]
+  ticks: 24
+  seeds: [9201]
