@@ -208,7 +208,12 @@ export class Simulator {
         agent,
         action: agent.queue.shift() ?? ({ type: "WAIT" } as Action),
       }));
-    for (const { agent, action } of attempted) this.resolve(agent, action);
+    for (const { agent, action } of attempted)
+      this.resolveAction(agent, action);
+    this.advanceEnvironment();
+  }
+
+  advanceEnvironment(): void {
     this.world.advance(this.tick);
     if (
       this.tick > 0 &&
@@ -229,6 +234,25 @@ export class Simulator {
     }
     this.executeArtifacts();
     this.tick++;
+  }
+
+  observeAgent(agentId: string) {
+    const agent = this.agents.find((candidate) => candidate.id === agentId);
+    if (!agent) throw new Error(`Unknown BioFoundry agent: ${agentId}`);
+    return this.world.observe(
+      this.tick,
+      agent,
+      this.agents,
+      this.artifacts,
+      this.messages.filter(
+        (message) =>
+          agent.pendingMessages.includes(message.id) || !message.recipientId,
+      ),
+      this.publications,
+      this.config.world.observationRadius,
+      this.caps.communication || this.caps.publication,
+      this.caps.crossAgentPrograms,
+    );
   }
 
   private reject(agent: AgentState, action: Action, reason: string): void {
@@ -255,7 +279,7 @@ export class Simulator {
     return agent.batches.find((b) => b.id === id);
   }
 
-  private resolve(agent: AgentState, action: Action): void {
+  resolveAction(agent: AgentState, action: Action): void {
     try {
       switch (action.type) {
         case "WAIT":

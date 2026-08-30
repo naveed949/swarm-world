@@ -18,6 +18,8 @@ This is a simulation engine, not a group-chat demo. Initially homogeneous agents
 - Local messaging, addressed delivery on the recipient’s next scheduled decision, publication with owned evidence, teaching, physical trade, and task claims.
 - Immutable JSONL event traces, config and trace hashes, frozen checkpoints, paired unseen disturbance schedules, agent-free evaluation, balanced portfolio resilience, discovery-frontier AUC, and endpoint-wise best-of-N isolated envelopes.
 - Pi SDK integration through `@earendil-works/pi-agent-core` and `@earendil-works/pi-ai`, using a provider-constrained `submit_plan` tool plus a second local Zod validation boundary. A deterministic heuristic cognition mode supports tests and no-cost smoke runs.
+- A shared `Environment` lifecycle (`observe`, `resolve`, `advance`, `freeze`, and `evaluate`) with BioFoundry and local TypeScript/Node repository adapters.
+- Repository-native typed graphs, bounded graph observations, evidence-owned inspection and search, read-only dry runs, isolated Git worktrees, preconditioned structured edits, fixed configured checks, content-addressed artifacts, deterministic integration queues, immutable action traces, and clean agent-free evaluation.
 
 The published paper reports a specific engine revision, prompt, and experimental dataset that were not publicly obtainable when this repository was created. This implementation preserves the disclosed scientific architecture and invariants; it does **not** claim bit-for-bit identity with the authors’ unreleased source or reproduction of their reported numerical results.
 
@@ -77,6 +79,25 @@ For every tick:
 8. Authoritative events enter private memory and the immutable trace.
 9. At a configured checkpoint, an exact frozen copy is evaluated with no agents and no model calls.
 
+## Repository environments
+
+Repository runs are constructed through `RepositoryEnvironment.create`. They are bound to a canonical local Git root and exact base commit. Read-only mode is the default; writable mode must be explicit and requires a clean base checkout outside configured exclusions.
+
+Facilities are operator configuration, not agent-selected commands. Each facility uses an absolute executable, fixed arguments, a timeout, bounded output, an explicit environment, and a mandatory/optional verification classification. Repository agents receive only the action vocabulary exposed by the adapter; arbitrary shell execution, dependency installation, network access, base-checkout mutation, pushes, merges, deployments, and tracker changes are not available.
+
+The public repository lifecycle is:
+
+1. Create an agent and observe its stable, bounded graph neighborhood.
+2. Inspect or search visible paths to acquire owned evidence.
+3. In writable mode, formulate an evidence-backed change recipe with declared targets and checks.
+4. Apply structured edits against expected content hashes in an isolated worktree.
+5. Run configured facilities; later edits invalidate their evidence.
+6. Construct a content-addressed commit artifact after all mandatory checks pass.
+7. Queue integration, advance the environment, and freeze the resulting exact candidate commit.
+8. Evaluate the frozen commit in a clean, agent-free checkout.
+
+`EnvironmentSimulator` supplies stable scheduling, bounded action queues, macroturn phases, and hash-chained consequence records without depending on either environment's domain model.
+
 ## Experimental conditions
 
 | Condition           |         Shared world | Messages/publication/teaching/trade | Cross-agent program access | Program forks | Physical stigmergy |
@@ -107,6 +128,10 @@ Tests cover fixed-seed generation, nested spawns, deterministic simulation, trea
 
 ```text
 src/
+  environment.ts shared authoritative lifecycle contract
+  environment-simulator.ts domain-neutral bounded scheduler
+  biofoundry-environment.ts BioFoundry lifecycle adapter
+  repository-environment.ts repository graph, evidence, patches, checks, artifacts, integration, evaluation
   cognition.ts   Pi and deterministic cognition adapters
   config.ts      validated experiment configuration and treatment contracts
   world.ts       authoritative lattice, resources, fields, generation, disturbances
