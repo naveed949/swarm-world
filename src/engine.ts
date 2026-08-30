@@ -1,5 +1,6 @@
 import { capabilities } from "./config.js";
 import { InvalidPlanError, type Cognition } from "./cognition.js";
+import type { EnvironmentResolution } from "./environment.js";
 import { sha256 } from "./hash.js";
 import { beginProcessing, finishProcessing } from "./materials.js";
 import { Trace } from "./trace.js";
@@ -133,19 +134,7 @@ export class Simulator {
       const staged = await Promise.all(
         decisionAgents.map(async (agent) => {
           try {
-            const observation = this.world.observe(
-              this.tick,
-              agent,
-              this.agents,
-              this.artifacts,
-              this.messages.filter(
-                (m) => agent.pendingMessages.includes(m.id) || !m.recipientId,
-              ),
-              this.publications,
-              this.config.world.observationRadius,
-              this.caps.communication || this.caps.publication,
-              this.caps.crossAgentPrograms,
-            );
+            const observation = this.observeAgent(agent.id);
             const proposal = await this.cognition!.plan(
               agent,
               observation,
@@ -208,7 +197,12 @@ export class Simulator {
         agent,
         action: agent.queue.shift() ?? ({ type: "WAIT" } as Action),
       }));
-    for (const { agent, action } of attempted) this.resolve(agent, action);
+    for (const { agent, action } of attempted)
+      this.resolveAction(agent, action);
+    this.advanceEnvironment();
+  }
+
+  advanceEnvironment(): void {
     this.world.advance(this.tick);
     if (
       this.tick > 0 &&
@@ -229,6 +223,42 @@ export class Simulator {
     }
     this.executeArtifacts();
     this.tick++;
+  }
+
+  observeAgent(agentId: string) {
+    const agent = this.agents.find((candidate) => candidate.id === agentId);
+    if (!agent) throw new Error(`Unknown BioFoundry agent: ${agentId}`);
+    return this.world.observe(
+      this.tick,
+      agent,
+      this.agents,
+      this.artifacts,
+      this.messages.filter(
+        (message) =>
+          agent.pendingMessages.includes(message.id) || !message.recipientId,
+      ),
+      this.publications,
+      this.config.world.observationRadius,
+      this.caps.communication || this.caps.publication,
+      this.caps.crossAgentPrograms,
+    );
+  }
+
+  resolveAgentAction(agentId: string, action: Action): EnvironmentResolution {
+    const agent = this.agents.find((candidate) => candidate.id === agentId);
+    if (!agent) throw new Error(`Unknown BioFoundry agent: ${agentId}`);
+    const before = this.trace.events.length;
+    this.resolveAction(agent, action);
+    const events = this.trace.events.slice(before);
+    const result = events.at(-1);
+    return {
+      accepted: result?.success ?? false,
+      ...(result?.targetId ? { targetId: result.targetId } : {}),
+      ...(!result?.success && typeof result?.data.reason === "string"
+        ? { reason: result.data.reason }
+        : {}),
+      evidenceIds: events.map((event) => event.id),
+    };
   }
 
   private reject(agent: AgentState, action: Action, reason: string): void {
@@ -255,7 +285,7 @@ export class Simulator {
     return agent.batches.find((b) => b.id === id);
   }
 
-  private resolve(agent: AgentState, action: Action): void {
+  private resolveAction(agent: AgentState, action: Action): void {
     try {
       switch (action.type) {
         case "WAIT":

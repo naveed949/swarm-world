@@ -1,0 +1,68 @@
+seed: 3201
+population: 2
+ticks: 4
+macroturnInterval: 1
+planLimit: 1
+condition: full
+planner: survey
+surveyQueries:
+  - sandbox
+  - worktree
+  - WorkerCoordinator
+
+environment:
+  type: repository
+  root: ../../workspace/target
+  baseCommit: b03b295836bdc7ce67846814f02a80705c162122
+  readOnly: true
+  task:
+    id: sandcastle-isolation-survey
+    title: Survey Sandcastle worker isolation boundaries
+    acceptanceCriteria:
+      - The pinned checkout is the Sandcastle package.
+      - Worker coordination and Docker sandbox sources are present.
+    acceptanceFacilityIds:
+      - package-contract
+    regressionFacilityIds:
+      - package-contract
+    relevantPaths:
+      - package.json
+      - src/WorkerCoordinator.ts
+      - src/WorkerIsolationPolicy.ts
+      - .sandcastle/Dockerfile
+    priority: 1
+  observationRadius: 2
+  observationLimit: 64
+  allowedPaths:
+    - package.json
+    - src/**/*.ts
+    - .sandcastle/Dockerfile
+  excludedPaths:
+    - .env
+    - .sandcastle/.env
+    - node_modules/**
+  patch:
+    maxFiles: 1
+    maxChangedLines: 1
+  facilities:
+    - id: package-contract
+      category: test
+      executable: /usr/local/bin/node
+      args:
+        - -e
+        - >-
+          const fs = require('node:fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const required = ['src/WorkerCoordinator.ts', 'src/WorkerIsolationPolicy.ts', '.sandcastle/Dockerfile'];
+          if (pkg.name !== '@ai-hero/sandcastle' || required.some((path) => !fs.existsSync(path))) process.exit(1);
+      workingDirectory: .
+      permittedPaths:
+        - package.json
+        - src/**/*.ts
+        - .sandcastle/Dockerfile
+      mutationClass: none
+      timeoutMs: 5000
+      outputLimit: 2000
+      concurrency: 1
+      environment: {}
+      mandatory: true

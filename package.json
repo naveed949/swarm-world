@@ -11,12 +11,18 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --coverage.enabled",
-    "test:watch": "vitest",
+    "test": "vitest run --dir test --coverage.enabled",
+    "test:watch": "vitest --dir test",
     "lint": "eslint .",
     "format": "prettier --check .",
     "format:fix": "prettier --write .",
     "demo": "npm run build && node dist/cli.js run --config examples/minimal.yaml",
+    "docker:build": "docker build --file docker/repository-runner.Dockerfile --tag swarm-world-repository:local .",
+    "example:sandcastle:prepare": "sh scripts/prepare-sandcastle-example.sh",
+    "example:sandcastle": "sh scripts/run-repository-container.sh .examples/sandcastle examples/repository/sandcastle.yaml runs/sandcastle-container",
+    "example:sandcastle:write": "sh scripts/run-repository-container.sh .examples/sandcastle examples/repository/sandcastle-write.yaml runs/sandcastle-write-container",
+    "example:sandcastle:issue-26:pi": "sh scripts/run-repository-pi-container.sh .examples/sandcastle-issue-26 examples/repository/sandcastle-issue-26-pi.yaml runs/sandcastle-issue-26-pi",
+    "test:repository:docker": "sh scripts/test-sandcastle-write-container.sh",
     "verify": "npm run check && npm run lint && npm run test && npm run build"
   },
   "engines": {

@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { Command } from "commander";
-import { loadConfig } from "./config.js";
 import { runExperiment } from "./experiment.js";
 import { sha256 } from "./hash.js";
+import { runRepositoryExperiment } from "./repository-experiment.js";
+import { loadRunConfig } from "./run-config.js";
 
 const program = new Command()
   .name("swarm-world")
@@ -15,11 +16,20 @@ program
   .requiredOption("-c, --config <path>", "YAML experiment configuration")
   .option("-o, --output <dir>", "output directory", "runs")
   .action(async ({ config, output }) => {
-    const resolved = await loadConfig(config);
+    const resolved = await loadRunConfig(config);
+    if (resolved.type === "repository") {
+      console.error(
+        `Running repository ${resolved.config.condition}, N=${resolved.config.population}, T=${resolved.config.ticks}`,
+      );
+      const result = await runRepositoryExperiment(resolved.config, output);
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      return;
+    }
+    const biofoundry = resolved.config;
     console.error(
-      `Running ${resolved.condition}, N=${resolved.population}, T=${resolved.ticks}, cognition=${resolved.cognition}`,
+      `Running ${biofoundry.condition}, N=${biofoundry.population}, T=${biofoundry.ticks}, cognition=${biofoundry.cognition}`,
     );
-    const result = await runExperiment(resolved, output);
+    const result = await runExperiment(biofoundry, output);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   });
 
@@ -35,7 +45,12 @@ program
   .option("--populations <list>", "comma-separated populations", "50,100,200")
   .option("--seeds <list>", "comma-separated seeds", "3201,3202,3203,3204")
   .action(async (opts) => {
-    const base = await loadConfig(opts.config);
+    const loaded = await loadRunConfig(opts.config);
+    if (loaded.type === "repository")
+      throw new Error(
+        "Repository matrices require an explicit planner and isolated run configuration",
+      );
+    const base = loaded.config;
     const results = [];
     for (const condition of opts.conditions.split(","))
       for (const population of opts.populations.split(",").map(Number))
@@ -63,6 +78,31 @@ program
     const manifest = lines[0];
     if (manifest?.type !== "manifest")
       throw new Error("Trace does not begin with a manifest");
+    if (manifest.environmentType === "repository") {
+      const environmentEvents = lines
+        .slice(1)
+        .filter((line) => line.recordType === "environment")
+        .map((line) => line.event);
+      const schedulerEvents = lines
+        .slice(1)
+        .filter((line) => line.recordType === "scheduler")
+        .map((line) => line.event);
+      const unknownRecords = lines
+        .slice(1)
+        .filter(
+          (line) =>
+            line.recordType !== "environment" &&
+            line.recordType !== "scheduler",
+        );
+      const actual = sha256({ schedulerEvents, environmentEvents });
+      const expected = manifest.summary.traceHash;
+      const valid = unknownRecords.length === 0 && actual === expected;
+      process.stdout.write(
+        `${JSON.stringify({ valid, expected, actual, events: environmentEvents.length + schedulerEvents.length }, null, 2)}\n`,
+      );
+      if (!valid) process.exitCode = 1;
+      return;
+    }
     const events = lines.slice(1).map((line) => line.event);
     const hash = sha256({
       config: manifest.config,
