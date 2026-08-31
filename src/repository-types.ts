@@ -240,6 +240,7 @@ export interface RepositoryRecipe {
   baseCommit: string;
   patchHash: string;
   checks: Map<string, string>;
+  invalid?: boolean;
 }
 
 export interface RepositoryTraceEvent {

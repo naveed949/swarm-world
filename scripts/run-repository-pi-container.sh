@@ -14,6 +14,7 @@ auth_file=${SWARM_WORLD_PI_AUTH_FILE:-${HOME}/.pi/agent/auth.json}
 provider=${SWARM_WORLD_PI_PROVIDER:-openai-codex}
 model=${SWARM_WORLD_PI_MODEL:-gpt-5.6-luna}
 reasoning=${SWARM_WORLD_PI_REASONING:-medium}
+sidecar_token=$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))')
 network_name="swarm-world-pi-$$"
 sidecar_name="swarm-world-pi-sidecar-$$"
 dependencies_volume="swarm-world-pi-dependencies-$$"
@@ -87,6 +88,7 @@ docker run --detach --rm \
   --env SWARM_WORLD_PI_PROVIDER="$provider" \
   --env SWARM_WORLD_PI_MODEL="$model" \
   --env SWARM_WORLD_PI_REASONING="$reasoning" \
+  --env SWARM_WORLD_PI_SIDECAR_TOKEN="$sidecar_token" \
   --entrypoint /app/docker/pi-sidecar-entrypoint.sh \
   "$image_name" >/dev/null
 docker network connect "$network_name" "$sidecar_name"
@@ -126,5 +128,6 @@ docker run --rm \
   --mount "type=volume,src=$dependencies_volume,dst=/workspace/dependencies,readonly" \
   --env HOME=/tmp/home \
   --env SWARM_WORLD_PI_SIDECAR_URL="http://$sidecar_name:4317" \
+  --env SWARM_WORLD_PI_SIDECAR_TOKEN="$sidecar_token" \
   --env SWARM_WORLD_DEPENDENCIES=/workspace/dependencies \
   "$image_name"

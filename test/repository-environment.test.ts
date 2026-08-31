@@ -33,8 +33,16 @@ function fixture(readOnly = true): RepositoryEnvironmentConfig {
     join(root, "math.test.ts"),
     "import { add } from './math.ts';\nif (add(2, 1) !== 3) process.exit(1);\n",
   );
+  writeFileSync(join(root, "notes.ts"), "export const note = 'unrelated';\n");
   writeFileSync(join(root, ".env"), "SECRET=hidden\n");
-  execFileSync("git", ["-C", root, "add", "math.ts", "math.test.ts"]);
+  execFileSync("git", [
+    "-C",
+    root,
+    "add",
+    "math.ts",
+    "math.test.ts",
+    "notes.ts",
+  ]);
   execFileSync("git", ["-C", root, "commit", "-qm", "fixture"]);
   const baseCommit = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], {
     encoding: "utf8",
@@ -77,6 +85,33 @@ function fixture(readOnly = true): RepositoryEnvironmentConfig {
 }
 
 describe("RepositoryEnvironment", () => {
+  it("rejects observed allowed files outside the approved task scope", async () => {
+    const environment = await RepositoryEnvironment.create(fixture());
+    environment.config.readOnly = false;
+    const agent = environment.createAgent("agent-1");
+    await environment.observe({ agentId: agent.id });
+    const searched = await environment.resolve({
+      agentId: agent.id,
+      action: { type: "SEARCH", query: "unrelated", paths: ["notes.ts"] },
+    });
+
+    await expect(
+      environment.resolve({
+        agentId: agent.id,
+        action: {
+          type: "FORMULATE",
+          taskId: "bug-add",
+          evidenceIds: searched.evidenceIds,
+          targets: ["notes.ts"],
+          requiredFacilities: ["acceptance"],
+        },
+      }),
+    ).resolves.toMatchObject({
+      accepted: false,
+      reason: "path or file-count policy rejected recipe",
+    });
+  });
+
   it("observes a deterministic, bounded, repository-native graph", async () => {
     const environment = await RepositoryEnvironment.create(fixture());
     const agent = environment.createAgent("agent-1");

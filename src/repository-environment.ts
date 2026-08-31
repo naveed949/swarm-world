@@ -980,6 +980,9 @@ export class RepositoryEnvironment implements Environment<
     if (
       action.targets.some((path) => !this.permitted(path)) ||
       action.targets.some(
+        (path) => !this.config.task.relevantPaths.includes(path),
+      ) ||
+      action.targets.some(
         (path) =>
           ![...agent.observedNodes].some(
             (nodeId) => this.nodes.get(nodeId)?.path === path,
@@ -1044,6 +1047,7 @@ export class RepositoryEnvironment implements Environment<
     if (
       !recipe ||
       recipe.ownerId !== agent.id ||
+      recipe.invalid ||
       !recipe.targets.includes(action.path)
     )
       return this.reject(agent.id, actionType, "patch or target unavailable");
@@ -1131,6 +1135,26 @@ export class RepositoryEnvironment implements Environment<
         })
       ).stdout.trim();
       result = await this.executeFacility(facility, recipe.worktree);
+      const unauthorized = (await this.changedPaths(recipe.worktree)).filter(
+        (path) =>
+          !recipe.targets.includes(path) ||
+          !this.config.task.relevantPaths.includes(path) ||
+          !this.permitted(path),
+      );
+      if (unauthorized.length) {
+        recipe.invalid = true;
+        const output =
+          `${result.output}\nFacility changed unauthorized paths`.slice(
+            0,
+            facility.outputLimit,
+          );
+        result = {
+          success: false,
+          exitCode: 126,
+          output,
+          outputDigest: sha256(output),
+        };
+      }
     } finally {
       this.facilityActive.set(
         facility.id,
@@ -1188,7 +1212,7 @@ export class RepositoryEnvironment implements Environment<
     recipeId: string,
   ): Promise<EnvironmentResolution> {
     const recipe = this.recipes.get(recipeId);
-    if (!recipe || recipe.ownerId !== agent.id)
+    if (!recipe || recipe.ownerId !== agent.id || recipe.invalid)
       return this.reject(agent.id, "CONSTRUCT_ARTIFACT", "patch unavailable");
     const currentHash = await this.patchHash(recipe.worktree);
     if (currentHash === sha256("") || currentHash !== recipe.patchHash)
@@ -1212,6 +1236,19 @@ export class RepositoryEnvironment implements Environment<
         "mandatory checks are missing or stale",
       );
     const changed = await this.changedPaths(recipe.worktree);
+    if (
+      changed.some(
+        (path) =>
+          !recipe.targets.includes(path) ||
+          !this.config.task.relevantPaths.includes(path) ||
+          !this.permitted(path),
+      )
+    )
+      return this.reject(
+        agent.id,
+        "CONSTRUCT_ARTIFACT",
+        "artifact contains unauthorized paths",
+      );
     await run("git", ["-C", recipe.worktree, "add", "--", ...changed]);
     const commitDate = await this.commitDate(recipe.baseCommit);
     await run(
@@ -1311,10 +1348,31 @@ export class RepositoryEnvironment implements Environment<
     const executable = isNodeFacility
       ? facility.executable
       : facility.sandbox!.executable;
+    const configuredDependencyPath = process.env.SWARM_WORLD_DEPENDENCIES;
     const dependencyPath = isNodeFacility
-      ? await realpath(join(canonicalWorktree, "node_modules")).catch(
-          () => undefined,
-        )
+      ? await realpath(join(canonicalWorktree, "node_modules"))
+          .then(async (resolved) => {
+            const relativeDependency = relative(canonicalWorktree, resolved);
+            if (
+              relativeDependency !== ".." &&
+              !relativeDependency.startsWith(`..${sep}`)
+            )
+              return resolved;
+            if (
+              configuredDependencyPath &&
+              resolved === (await realpath(configuredDependencyPath))
+            )
+              return resolved;
+            throw new Error("Untrusted dependency path escapes its worktree");
+          })
+          .catch((error: unknown) => {
+            if (
+              error instanceof Error &&
+              error.message === "Untrusted dependency path escapes its worktree"
+            )
+              throw error;
+            return undefined;
+          })
       : undefined;
     const args = isNodeFacility
       ? [

@@ -65,10 +65,12 @@ describe("repository container runner", () => {
       "dst=/run/secrets/pi-auth.json,readonly",
       "docker network create --internal",
       "SWARM_WORLD_PI_SIDECAR_URL",
+      "SWARM_WORLD_PI_SIDECAR_TOKEN",
       "SWARM_WORLD_DEPENDENCIES",
     ])
       expect(script).toContain(constraint);
     expect(script.match(/dst=\/run\/secrets\/pi-auth\.json/g)).toHaveLength(1);
+    expect(script.match(/SWARM_WORLD_PI_SIDECAR_TOKEN/g)).toHaveLength(2);
     expect(script).not.toContain("SWARM_WORLD_PI_AUTH_PATH");
     expect(script).toContain('--network "$network_name"');
     expect(script).toContain("repository-dependencies-entrypoint.sh");

@@ -5,6 +5,10 @@ import {
   type RepositoryPlanRequestInput,
 } from "./repository-pi-planner.js";
 import type { RepositoryRunConfig } from "./run-config.js";
+import {
+  isAuthorizedSidecarRequest,
+  requireSidecarToken,
+} from "./pi-sidecar-auth.js";
 
 const requestSchema = z
   .object({
@@ -20,12 +24,16 @@ const id = process.env.SWARM_WORLD_PI_MODEL;
 const reasoning = z
   .enum(["off", "minimal", "low", "medium", "high", "xhigh"])
   .parse(process.env.SWARM_WORLD_PI_REASONING ?? "medium");
-if (!provider || !id) throw new Error("Pi sidecar model configuration is missing");
+if (!provider || !id)
+  throw new Error("Pi sidecar model configuration is missing");
 
 const requestPlan = createPiModelRequest({
   model: { provider, id, temperature: 0, reasoning },
 } as RepositoryRunConfig);
 const port = Number(process.env.SWARM_WORLD_PI_SIDECAR_PORT ?? "4317");
+const token = requireSidecarToken(process.env.SWARM_WORLD_PI_SIDECAR_TOKEN);
+const maxConcurrent = 4;
+let activeRequests = 0;
 
 const server = createServer((request, response) => {
   if (request.method === "GET" && request.url === "/health") {
@@ -37,6 +45,16 @@ const server = createServer((request, response) => {
     response.writeHead(404).end();
     return;
   }
+  if (!isAuthorizedSidecarRequest(request.headers.authorization, token)) {
+    response.writeHead(401, { "content-type": "application/json" });
+    response.end('{"error":"unauthorized"}');
+    return;
+  }
+  if (activeRequests >= maxConcurrent) {
+    response.writeHead(429, { "content-type": "application/json" });
+    response.end('{"error":"sidecar busy"}');
+    return;
+  }
   let size = 0;
   const chunks: Buffer[] = [];
   request.on("data", (chunk: Buffer) => {
@@ -45,6 +63,7 @@ const server = createServer((request, response) => {
     else chunks.push(chunk);
   });
   request.on("end", () => {
+    activeRequests++;
     void (async () => {
       try {
         const input = requestSchema.parse(
@@ -56,9 +75,15 @@ const server = createServer((request, response) => {
       } catch {
         response.writeHead(502, { "content-type": "application/json" });
         response.end('{"error":"planning failed"}');
+      } finally {
+        activeRequests--;
       }
     })();
   });
 });
 
+server.headersTimeout = 10_000;
+server.requestTimeout = 310_000;
+server.keepAliveTimeout = 5_000;
+server.maxRequestsPerSocket = 100;
 server.listen(port, "0.0.0.0");
