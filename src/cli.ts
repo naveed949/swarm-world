@@ -3,7 +3,10 @@ import { readFile } from "node:fs/promises";
 import { Command } from "commander";
 import { runExperiment } from "./experiment.js";
 import { sha256 } from "./hash.js";
-import { runRepositoryExperiment } from "./repository-experiment.js";
+import {
+  runRepositoryCoordinationComparison,
+  runRepositoryExperiment,
+} from "./repository-experiment.js";
 import { loadRunConfig } from "./run-config.js";
 
 const program = new Command()
@@ -30,6 +33,36 @@ program
       `Running ${biofoundry.condition}, N=${biofoundry.population}, T=${biofoundry.ticks}, cognition=${biofoundry.cognition}`,
     );
     const result = await runExperiment(biofoundry, output);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  });
+
+program
+  .command("repository-matrix")
+  .requiredOption("-c, --config <path>", "repository YAML configuration")
+  .option("-o, --output <dir>", "output directory", "runs")
+  .option(
+    "--models <list>",
+    "comma-separated coordination models",
+    "emergent-society,fixed-workflow,central-supervisor,independent-search",
+  )
+  .action(async ({ config, output, models }) => {
+    const loaded = await loadRunConfig(config);
+    if (loaded.type !== "repository")
+      throw new Error("repository-matrix requires a repository configuration");
+    const allowed = new Set([
+      "emergent-society",
+      "fixed-workflow",
+      "central-supervisor",
+      "independent-search",
+    ] as const);
+    const requested = String(models).split(",");
+    if (requested.some((model) => !allowed.has(model as never)))
+      throw new Error("Unknown repository coordination model");
+    const result = await runRepositoryCoordinationComparison(
+      loaded.config,
+      output,
+      requested as Array<NonNullable<typeof loaded.config.coordinationModel>>,
+    );
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   });
 

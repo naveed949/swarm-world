@@ -20,6 +20,7 @@ This is a simulation engine, not a group-chat demo. Initially homogeneous agents
 - Pi SDK integration through `@earendil-works/pi-agent-core` and `@earendil-works/pi-ai`, using a provider-constrained `submit_plan` tool plus a second local Zod validation boundary. A deterministic heuristic cognition mode supports tests and no-cost smoke runs.
 - A shared `Environment` lifecycle (`observe`, `resolve`, `advance`, `freeze`, and `evaluate`) with BioFoundry and local TypeScript/Node repository adapters.
 - Repository-native typed graphs, bounded graph observations, evidence-owned inspection and search, read-only dry runs, isolated Git worktrees, preconditioned structured edits, fixed configured checks, content-addressed artifacts, deterministic integration queues, immutable action traces, and clean agent-free evaluation.
+- Goal-directed repository societies with evidence-backed problem discovery, admitted task decomposition, agent-authored temporary roles, leased differentiated commitments, competing candidate worktrees, mandatory independent verification, deterministic evidence-first selection, periodic checkpoints, and bounded success/stall termination.
 
 The published paper reports a specific engine revision, prompt, and experimental dataset that were not publicly obtainable when this repository was created. This implementation preserves the disclosed scientific architecture and invariants; it does **not** claim bit-for-bit identity with the authors’ unreleased source or reproduction of their reported numerical results.
 
@@ -125,6 +126,55 @@ The public repository lifecycle is:
 6. Construct a content-addressed commit artifact after all mandatory checks pass.
 7. Queue integration, advance the environment, and freeze the resulting exact candidate commit.
 8. Evaluate the frozen commit in a clean, agent-free checkout.
+
+### Emergent repository societies
+
+Repository configurations may include an immutable `goal` contract containing
+measurable success, action/write/attempt/verification/model budgets, checkpoint
+frequency, sustained-success requirements, and a no-progress limit. When a goal
+is present, agents are not assigned permanent implementer or collaborator
+identities. They can instead:
+
+1. Publish an evidence-owned problem and have another agent confirm or
+   challenge it.
+2. Propose an admitted task or decompose an existing task without widening its
+   path authority.
+3. Claim a leased commitment with an agent-authored role and differentiated
+   approach. Duplicate active approaches are rejected; abandoned commitments
+   expire.
+4. Formulate and implement competing recipes in the existing isolated Git
+   worktrees.
+5. Submit immutable candidate commits and request verification.
+6. Verify another agent's artifact from a clean checkout. Authors cannot verify
+   their own artifacts. In the isolated `independent-search` treatment, an
+   agent-free environment verifier runs the same mandatory facilities so the
+   one-member world is not forced to self-approve.
+7. Recommend eligible candidates and request controlled integration only after
+   the whole submitted portfolio has independent results for every mandatory
+   visible facility.
+8. Let the environment select one winner by mandatory evidence,
+   recommendations, task coverage, changed-line cost, and stable artifact ID.
+
+Role labels never grant authority. All permissions continue to derive from the
+environment, treatment, path policy, evidence ownership, commitment state, and
+authorship separation. Hidden facilities remain unavailable during discovery
+and run only in agent-free checkpoint/final evaluation.
+
+Without a `goal`, repository configurations retain the original single-task
+legacy lifecycle for compatibility with retained examples.
+
+Compare the same pinned repository, goal, facilities, population and budget
+across the four coordination models:
+
+```bash
+node dist/cli.js repository-matrix \
+  --config examples/repository/sandcastle-issue-26-pi.yaml \
+  --models emergent-society,fixed-workflow,central-supervisor,independent-search
+```
+
+Each model produces its own retained run and the command returns a compact
+comparison of completion, hard gates, correctness, regression safety, issue
+coverage, maintainability, robustness, trace identity, and stopping reason.
 
 `EnvironmentSimulator` supplies stable scheduling, bounded action queues, macroturn phases, and hash-chained consequence records without depending on either environment's domain model.
 

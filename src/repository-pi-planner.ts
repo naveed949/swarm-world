@@ -25,6 +25,76 @@ const actionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("CLAIM_TASK"), taskId: z.string() }).strict(),
   z
     .object({
+      type: z.literal("PROPOSE_PROBLEM"),
+      statement: z.string().min(1).max(5_000),
+      evidenceIds: z.array(z.string()).min(1).max(64),
+      goalImpact: z.string().min(1).max(2_000),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("CONFIRM_PROBLEM"),
+      problemId: z.string(),
+      evidenceIds: z.array(z.string()).min(1).max(64),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("CHALLENGE_PROBLEM"),
+      problemId: z.string(),
+      evidenceIds: z.array(z.string()).min(1).max(64),
+      reason: z.string().min(1).max(2_000),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("PROPOSE_TASK"),
+      problemId: z.string(),
+      objective: z.string().min(1).max(2_000),
+      expectedOutcome: z.string().min(1).max(2_000),
+      relevantPaths: z.array(z.string()).min(1).max(32),
+      acceptanceCriteria: z.array(z.string()).min(1).max(32),
+      acceptanceFacilityIds: z.array(z.string()).min(1).max(16),
+      regressionFacilityIds: z.array(z.string()).min(1).max(16),
+      dependencies: z.array(z.string()).max(32),
+      verificationPlan: z.array(z.string()).min(1).max(32),
+      estimatedCost: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("DECOMPOSE_TASK"),
+      taskId: z.string(),
+      objective: z.string().min(1).max(2_000),
+      relevantPaths: z.array(z.string()).min(1).max(32),
+      verificationPlan: z.array(z.string()).min(1).max(32),
+      estimatedCost: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("CLAIM_COMMITMENT"),
+      taskId: z.string(),
+      approach: z.string().min(1).max(500),
+      roleLabel: z.string().min(1).max(200),
+      intendedContribution: z.string().min(1).max(2_000),
+      exitCondition: z.string().min(1).max(1_000),
+      leaseTicks: z.number().int().min(1).max(128),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("JOIN_COMMITMENT"),
+      commitmentId: z.string(),
+      roleLabel: z.string().min(1).max(200),
+      leaseTicks: z.number().int().min(1).max(128),
+    })
+    .strict(),
+  z
+    .object({ type: z.literal("RELEASE_COMMITMENT"), commitmentId: z.string() })
+    .strict(),
+  z
+    .object({
       type: z.literal("COMMUNICATE"),
       recipientId: z.string(),
       text: z.string().min(1).max(2_000),
@@ -76,6 +146,27 @@ const actionSchema = z.discriminatedUnion("type", [
     .object({ type: z.literal("CONSTRUCT_ARTIFACT"), recipeId: z.string() })
     .strict(),
   z
+    .object({ type: z.literal("REQUEST_VERIFICATION"), artifactId: z.string() })
+    .strict(),
+  z
+    .object({
+      type: z.literal("VERIFY_ARTIFACT"),
+      artifactId: z.string(),
+      facilityId: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("CHALLENGE_VERIFICATION"),
+      verificationId: z.string(),
+      evidenceIds: z.array(z.string()).min(1).max(64),
+      reason: z.string().min(1).max(2_000),
+    })
+    .strict(),
+  z
+    .object({ type: z.literal("RECOMMEND_CANDIDATE"), artifactId: z.string() })
+    .strict(),
+  z
     .object({
       type: z.literal("PUBLISH_FINDING"),
       title: z.string().min(1).max(200),
@@ -90,10 +181,41 @@ const actionSchema = z.discriminatedUnion("type", [
 
 const planSchema = z.object({ actions: z.array(actionSchema).min(1).max(1) });
 
+const COMMITMENT_ACTIONS = new Set<RepositoryAction["type"]>([
+  "FORMULATE",
+  "EDIT",
+  "EDIT_REPLACE",
+  "RUN_CHECK",
+  "CONSTRUCT_ARTIFACT",
+]);
+
+const REVIEW_ACTIONS = new Set<RepositoryAction["type"]>([
+  "WAIT",
+  "FOCUS",
+  "INSPECT",
+  "SEARCH",
+  "COMMUNICATE",
+  "PUBLISH_FINDING",
+  "REQUEST_VERIFICATION",
+  "VERIFY_ARTIFACT",
+  "CHALLENGE_VERIFICATION",
+  "RECOMMEND_CANDIDATE",
+  "REQUEST_INTEGRATION",
+]);
+
+const SUPERVISOR_ACTIONS = new Set<RepositoryAction["type"]>([
+  ...REVIEW_ACTIONS,
+  "PROPOSE_PROBLEM",
+  "CONFIRM_PROBLEM",
+  "CHALLENGE_PROBLEM",
+  "PROPOSE_TASK",
+  "DECOMPOSE_TASK",
+]);
+
 export interface RepositoryPlanRequestInput {
   agentId: string;
   tick: number;
-  role: "implementer" | "collaborator";
+  role: string;
   context: Record<string, unknown>;
 }
 
@@ -101,21 +223,11 @@ export type RepositoryPlanRequest = (
   input: RepositoryPlanRequestInput,
 ) => Promise<unknown>;
 
-const COLLABORATOR_ACTIONS = new Set<RepositoryAction["type"]>([
-  "WAIT",
-  "FOCUS",
-  "INSPECT",
-  "SEARCH",
-  "COMMUNICATE",
-  "TEACH_ARTIFACT",
-  "PUBLISH_FINDING",
-]);
-
-const SYSTEM_PROMPT = `You are a bounded repository agent operating on one real task. You do not have shell, GitHub mutation, push, merge, deployment, credential, or arbitrary network tools. The deterministic repository environment owns consequences.
+const SYSTEM_PROMPT = `You are a bounded repository-society agent operating toward one immutable goal. You do not have shell, GitHub mutation, push, merge, deployment, credential, or arbitrary network tools. The deterministic repository environment owns consequences.
 
 Call submit_repository_plan exactly once with exactly one atomic action. Use only IDs, paths, content hashes, evidence, recipes, artifacts, facilities, and affordances present in the current context. Never invent state. Results from an action arrive only in a later observation.
 
-The implementer must follow plannerPhase.requiredActionTypes. Once it owns a recipe it must not explore or formulate again: edit the recipe, run every missing fixed check, construct the artifact, then request integration. A collaborator is read-only and should inspect/search, communicate grounded findings to agent_000000, or publish a finding. Prefer WAIT when the next safe action is unavailable. Never place credentials or issue-tracker mutations in code, messages, findings, or artifacts.`;
+Roles are temporary commitments, not identities. You may investigate, propose or challenge a problem, create or decompose a task, claim a differentiated approach, implement, independently verify another agent's artifact, or recommend an eligible candidate. Never verify your own artifact. Follow plannerPhase.requiredActionTypes while you own an active recipe. Prefer WAIT when the next safe action is unavailable. Never place credentials or issue-tracker mutations in code, messages, findings, or artifacts.`;
 
 type JsonSchema = Record<string, unknown>;
 
@@ -174,7 +286,7 @@ export function repositoryPlanJsonSchema(
   return schema;
 }
 
-function implementerPhase(observation: RepositoryObservation): {
+function activeWorkPhase(observation: RepositoryObservation): {
   name: string;
   requiredActionTypes: RepositoryAction["type"][];
   recipeId?: string;
@@ -182,11 +294,30 @@ function implementerPhase(observation: RepositoryObservation): {
   missingFacilityIds?: string[];
 } {
   const artifactId = observation.ownedArtifactIds[0];
-  if (artifactId)
+  if (artifactId) {
+    if (!observation.goal)
+      return {
+        name: "request-integration",
+        requiredActionTypes: ["REQUEST_INTEGRATION"],
+      };
+    const candidate = observation.candidates?.find(
+      (item) => item.artifactId === artifactId,
+    );
+    if (!candidate?.verificationRequested)
+      return {
+        name: "request-verification",
+        requiredActionTypes: ["REQUEST_VERIFICATION"],
+      };
+    if (!candidate.eligible)
+      return {
+        name: "await-independent-verification",
+        requiredActionTypes: ["WAIT", "COMMUNICATE"],
+      };
     return {
       name: "request-integration",
       requiredActionTypes: ["REQUEST_INTEGRATION"],
     };
+  }
   const recipe = observation.ownedRecipes[0];
   if (!recipe)
     return {
@@ -329,9 +460,33 @@ export function createPiRepositoryPlanner(
 ): EnvironmentPlanner<RepositoryObservation, RepositoryAction> {
   return {
     plan: async ({ agentId, tick, observation }) => {
-      const role = agentId === "agent_000000" ? "implementer" : "collaborator";
+      const coordinationModel =
+        config.coordinationModel ??
+        (config.condition === "independent"
+          ? "independent-search"
+          : observation.goal
+            ? "emergent-society"
+            : "fixed-workflow");
+      const commitment = observation.commitments?.find(
+        (candidate) =>
+          candidate.agentId === agentId && candidate.status === "active",
+      );
+      const role =
+        coordinationModel === "fixed-workflow"
+          ? agentId === "agent_000000"
+            ? "implementer"
+            : "independent-verifier"
+          : coordinationModel === "central-supervisor"
+            ? agentId === "agent_000000"
+              ? "central-supervisor"
+              : (commitment?.roleLabel ?? "unassigned-worker")
+            : coordinationModel === "independent-search"
+              ? "independent-agent"
+              : (commitment?.roleLabel ?? "uncommitted");
       const plannerPhase =
-        role === "implementer" ? implementerPhase(observation) : undefined;
+        observation.ownedRecipeIds.length || observation.ownedArtifactIds.length
+          ? activeWorkPhase(observation)
+          : undefined;
       const context = {
         role,
         tick,
@@ -344,6 +499,7 @@ export function createPiRepositoryPlanner(
           mandatory: facility.mandatory,
           permittedPaths: facility.permittedPaths,
         })),
+        coordinationModel,
         observation,
       };
       const response = await request({ agentId, tick, role, context });
@@ -357,7 +513,19 @@ export function createPiRepositoryPlanner(
           !plannerPhase.requiredActionTypes.includes(action.type)
         )
           return [{ type: "WAIT" }];
-        if (role === "collaborator" && !COLLABORATOR_ACTIONS.has(action.type))
+        if (!commitment && COMMITMENT_ACTIONS.has(action.type))
+          return [{ type: "WAIT" }];
+        if (
+          coordinationModel === "fixed-workflow" &&
+          agentId !== "agent_000000" &&
+          !REVIEW_ACTIONS.has(action.type)
+        )
+          return [{ type: "WAIT" }];
+        if (
+          coordinationModel === "central-supervisor" &&
+          agentId === "agent_000000" &&
+          !SUPERVISOR_ACTIONS.has(action.type)
+        )
           return [{ type: "WAIT" }];
         return [action];
       } catch {

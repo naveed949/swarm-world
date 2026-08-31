@@ -10,6 +10,7 @@ import {
 } from "../src/repository-environment.js";
 import {
   createRepositoryPlanner,
+  runRepositoryCoordinationComparison,
   runRepositoryExperiment,
 } from "../src/repository-experiment.js";
 import { loadRunConfig } from "../src/run-config.js";
@@ -323,7 +324,7 @@ describe("RepositoryEnvironment", () => {
     });
   });
 
-  it("enforces treatment capabilities and exclusive authoritative claims", async () => {
+  it("enforces treatment capabilities while admitting distinct competing commitments", async () => {
     const disabled = await RepositoryEnvironment.create({
       ...fixture(),
       condition: "no-communication",
@@ -342,6 +343,7 @@ describe("RepositoryEnvironment", () => {
     const enabled = await RepositoryEnvironment.create(fixture());
     const first = enabled.createAgent("agent-1");
     const second = enabled.createAgent("agent-2");
+    const transient = enabled.createAgent("agent-3");
     await enabled.resolve({
       agentId: first.id,
       action: { type: "CLAIM_TASK", taskId: "bug-add" },
@@ -351,7 +353,45 @@ describe("RepositoryEnvironment", () => {
         agentId: second.id,
         action: { type: "CLAIM_TASK", taskId: "bug-add" },
       }),
-    ).toMatchObject({ accepted: false, reason: "task already claimed" });
+    ).toMatchObject({ accepted: true });
+    expect((await enabled.observe({ agentId: first.id })).commitments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ agentId: first.id, status: "active" }),
+        expect.objectContaining({ agentId: second.id, status: "active" }),
+      ]),
+    );
+    expect(
+      await enabled.resolve({
+        agentId: transient.id,
+        action: {
+          type: "CLAIM_COMMITMENT",
+          taskId: "bug-add",
+          approach: `default-${first.id}`,
+          roleLabel: "duplicate-implementer",
+          intendedContribution: "Repeat the existing approach",
+          exitCondition: "Candidate submitted",
+          leaseTicks: 4,
+        },
+      }),
+    ).toMatchObject({ accepted: false, reason: "duplicate active approach" });
+    await enabled.resolve({
+      agentId: transient.id,
+      action: {
+        type: "CLAIM_COMMITMENT",
+        taskId: "bug-add",
+        approach: "short-lived investigation",
+        roleLabel: "failure-reproducer",
+        intendedContribution: "Reproduce the defect",
+        exitCondition: "Evidence is published",
+        leaseTicks: 1,
+      },
+    });
+    await enabled.advance();
+    expect((await enabled.observe({ agentId: first.id })).commitments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ agentId: transient.id, status: "expired" }),
+      ]),
+    );
   });
 
   it("records inspections as owned evidence and rejects writes in dry-run mode", async () => {
@@ -503,5 +543,498 @@ describe("RepositoryEnvironment", () => {
       environment.baseCommit,
     ]);
     expect(result.summary.memberTraceHashes).toHaveLength(2);
+  });
+
+  it("freezes periodic checkpoints and stops a stalled repository society", async () => {
+    const environment = fixture();
+    environment.goal = {
+      id: "bounded-survey",
+      statement: "Find a verified repository improvement",
+      success: { minimumEligibleArtifacts: 1 },
+      budget: {
+        maxActions: 16,
+        maxVerificationRuns: 4,
+        maxWrites: 20,
+        maxAttempts: 2,
+        maxModelCalls: 10,
+      },
+      stop: {
+        successSustainedForCheckpoints: 1,
+        noProgressTicks: 2,
+        checkpointInterval: 1,
+      },
+    };
+    const result = await runRepositoryExperiment(
+      {
+        seed: 20,
+        population: 1,
+        ticks: 10,
+        macroturnInterval: 1,
+        planLimit: 1,
+        condition: "full",
+        environment,
+      },
+      mkdtempSync(join(tmpdir(), "swarm-world-stalled-")),
+      { plan: async () => [{ type: "WAIT" }] },
+    );
+
+    expect(result.summary.stopReason).toBe("no-progress");
+    expect(result.summary.checkpoints).toHaveLength(2);
+    expect(
+      result.summary.checkpoints?.every(
+        (checkpoint) => !checkpoint.goalSatisfied,
+      ),
+    ).toBe(true);
+  });
+
+  it("compares all repository coordination models on the same pinned world", async () => {
+    const environment = fixture();
+    environment.goal = {
+      id: "comparison",
+      statement: "Compare bounded coordination",
+      success: { minimumEligibleArtifacts: 1 },
+      budget: {
+        maxActions: 4,
+        maxVerificationRuns: 2,
+        maxWrites: 20,
+        maxAttempts: 2,
+        maxModelCalls: 2,
+      },
+      stop: {
+        successSustainedForCheckpoints: 1,
+        noProgressTicks: 1,
+        checkpointInterval: 1,
+      },
+    };
+    const config = {
+      seed: 21,
+      population: 1,
+      ticks: 2,
+      macroturnInterval: 1,
+      planLimit: 1,
+      condition: "full" as const,
+      environment,
+    };
+    const comparison = await runRepositoryCoordinationComparison(
+      config,
+      mkdtempSync(join(tmpdir(), "swarm-world-comparison-")),
+      [
+        "emergent-society",
+        "fixed-workflow",
+        "central-supervisor",
+        "independent-search",
+      ],
+      () => ({ plan: async () => [{ type: "WAIT" }] }),
+    );
+
+    expect(comparison.baseCommit).toBe(environment.baseCommit);
+    expect(
+      comparison.results.map(({ coordinationModel }) => coordinationModel),
+    ).toEqual([
+      "emergent-society",
+      "fixed-workflow",
+      "central-supervisor",
+      "independent-search",
+    ]);
+    expect(
+      comparison.results.every(
+        ({ stopReason }) => stopReason === "no-progress",
+      ),
+    ).toBe(true);
+  });
+
+  it("runs an emergent society from problem discovery through competing verified candidates", async () => {
+    const config = fixture();
+    config.goal = {
+      id: "repair-math",
+      statement: "Make addition correct without regressions",
+      success: {
+        mandatoryChecksPass: true,
+        minimumEligibleArtifacts: 2,
+      },
+      budget: {
+        maxActions: 64,
+        maxVerificationRuns: 8,
+        maxWrites: 20,
+        maxAttempts: 4,
+      },
+      stop: {
+        successSustainedForCheckpoints: 1,
+        noProgressTicks: 10,
+        checkpointInterval: 1,
+      },
+    };
+    const environment = await RepositoryEnvironment.create(config);
+    environment.config.readOnly = false;
+    const candidateParent = mkdtempSync(
+      join(tmpdir(), "swarm-world-candidate-test-"),
+    );
+    const candidateWorktree = join(candidateParent, "checkout");
+    execFileSync("git", [
+      "-C",
+      config.root,
+      "worktree",
+      "add",
+      "--detach",
+      candidateWorktree,
+      config.baseCommit,
+    ]);
+    (
+      environment as unknown as { candidateWorktree: string }
+    ).candidateWorktree = candidateWorktree;
+
+    for (const id of ["minimalist", "compatibility", "verifier"])
+      environment.createAgent(id);
+    const initial = await environment.observe({ agentId: "minimalist" });
+    await environment.observe({ agentId: "compatibility" });
+    await environment.observe({ agentId: "verifier" });
+    const math = initial.nodes.find((node) => node.path === "math.ts")!;
+    const inspect = async (agentId: string) =>
+      await environment.resolve({
+        agentId,
+        action: { type: "INSPECT", nodeId: math.id },
+      });
+    const minimalEvidence = (await inspect("minimalist")).evidenceIds;
+    const compatibilityEvidence = (await inspect("compatibility")).evidenceIds;
+
+    const problem = await environment.resolve({
+      agentId: "minimalist",
+      action: {
+        type: "PROPOSE_PROBLEM",
+        statement: "The add function subtracts its second operand",
+        evidenceIds: minimalEvidence,
+        goalImpact: "The configured acceptance behavior fails",
+      },
+    });
+    expect(problem.accepted).toBe(true);
+    expect(
+      await environment.resolve({
+        agentId: "compatibility",
+        action: {
+          type: "CONFIRM_PROBLEM",
+          problemId: problem.targetId!,
+          evidenceIds: compatibilityEvidence,
+        },
+      }),
+    ).toMatchObject({ accepted: true });
+    const proposedTask = await environment.resolve({
+      agentId: "minimalist",
+      action: {
+        type: "PROPOSE_TASK",
+        problemId: problem.targetId!,
+        objective: "Correct add while preserving its exported contract",
+        expectedOutcome: "add(2, 1) returns 3",
+        relevantPaths: ["math.ts", "math.test.ts"],
+        acceptanceCriteria: ["add(2, 1) returns 3"],
+        acceptanceFacilityIds: ["acceptance"],
+        regressionFacilityIds: ["acceptance"],
+        dependencies: [],
+        verificationPlan: ["Run acceptance from a clean candidate commit"],
+        estimatedCost: 4,
+      },
+    });
+    expect(proposedTask.accepted).toBe(true);
+    const decomposition = await environment.resolve({
+      agentId: "compatibility",
+      action: {
+        type: "DECOMPOSE_TASK",
+        taskId: proposedTask.targetId!,
+        objective: "Repair the math implementation without changing tests",
+        relevantPaths: ["math.ts"],
+        verificationPlan: ["Run acceptance from the candidate commit"],
+        estimatedCost: 3,
+      },
+    });
+    expect(decomposition.accepted).toBe(true);
+    const taskId = decomposition.targetId!;
+
+    expect(
+      await environment.resolve({
+        agentId: "minimalist",
+        action: {
+          type: "FORMULATE",
+          taskId,
+          evidenceIds: minimalEvidence,
+          targets: ["math.ts"],
+          requiredFacilities: ["acceptance"],
+        },
+      }),
+    ).toMatchObject({
+      accepted: false,
+      reason: "an active task commitment is required",
+    });
+
+    for (const [agentId, approach, roleLabel] of [
+      ["minimalist", "single-operator repair", "minimal-patch-implementer"],
+      [
+        "compatibility",
+        "named function compatibility repair",
+        "compatibility-implementer",
+      ],
+    ] as const)
+      expect(
+        await environment.resolve({
+          agentId,
+          action: {
+            type: "CLAIM_COMMITMENT",
+            taskId,
+            approach,
+            roleLabel,
+            intendedContribution: approach,
+            exitCondition: "Submit a checked candidate",
+            leaseTicks: 20,
+          },
+        }),
+      ).toMatchObject({ accepted: true });
+
+    const formulate = async (agentId: string, evidenceIds: string[]) =>
+      await environment.resolve({
+        agentId,
+        action: {
+          type: "FORMULATE",
+          taskId,
+          evidenceIds,
+          targets: ["math.ts"],
+          requiredFacilities: ["acceptance"],
+        },
+      });
+    const firstRecipe = await formulate("minimalist", minimalEvidence);
+    const secondRecipe = await formulate(
+      "compatibility",
+      compatibilityEvidence,
+    );
+    expect(firstRecipe.accepted && secondRecipe.accepted).toBe(true);
+
+    const editAndSubmit = async (
+      agentId: string,
+      recipeId: string,
+      content: string,
+    ) => {
+      expect(
+        await environment.resolve({
+          agentId,
+          action: {
+            type: "EDIT",
+            recipeId,
+            path: "math.ts",
+            expectedContentHash: math.contentHash!,
+            content,
+          },
+        }),
+      ).toMatchObject({ accepted: true });
+      expect(
+        await environment.resolve({
+          agentId,
+          action: { type: "RUN_CHECK", recipeId, facilityId: "acceptance" },
+        }),
+      ).toMatchObject({ accepted: true });
+      return await environment.resolve({
+        agentId,
+        action: { type: "CONSTRUCT_ARTIFACT", recipeId },
+      });
+    };
+    const minimalArtifact = await editAndSubmit(
+      "minimalist",
+      firstRecipe.targetId!,
+      "export const add = (a: number, b: number) => a + b;\n",
+    );
+    const compatibilityArtifact = await editAndSubmit(
+      "compatibility",
+      secondRecipe.targetId!,
+      "export function add(a: number, b: number): number {\n  return a + b;\n}\n",
+    );
+    expect(minimalArtifact.accepted && compatibilityArtifact.accepted).toBe(
+      true,
+    );
+
+    for (const [agentId, artifactId] of [
+      ["minimalist", minimalArtifact.targetId!],
+      ["compatibility", compatibilityArtifact.targetId!],
+    ] as const)
+      expect(
+        await environment.resolve({
+          agentId,
+          action: { type: "REQUEST_VERIFICATION", artifactId },
+        }),
+      ).toMatchObject({ accepted: true });
+
+    expect(
+      await environment.resolve({
+        agentId: "minimalist",
+        action: {
+          type: "VERIFY_ARTIFACT",
+          artifactId: minimalArtifact.targetId!,
+          facilityId: "acceptance",
+        },
+      }),
+    ).toMatchObject({
+      accepted: false,
+      reason: "authors cannot verify their own artifacts",
+    });
+    for (const artifactId of [
+      minimalArtifact.targetId!,
+      compatibilityArtifact.targetId!,
+    ])
+      expect(
+        await environment.resolve({
+          agentId: "verifier",
+          action: {
+            type: "VERIFY_ARTIFACT",
+            artifactId,
+            facilityId: "acceptance",
+          },
+        }),
+      ).toMatchObject({ accepted: true });
+
+    expect(
+      await environment.resolve({
+        agentId: "verifier",
+        action: {
+          type: "REQUEST_INTEGRATION",
+          artifactId: minimalArtifact.targetId!,
+        },
+      }),
+    ).toMatchObject({ accepted: true });
+    await environment.advance();
+    const frozen = await environment.freeze();
+    const evaluation = await environment.evaluate(frozen);
+
+    expect(frozen.selection).toMatchObject({
+      selectedArtifactId: minimalArtifact.targetId,
+      eligibleArtifactIds: expect.arrayContaining([
+        minimalArtifact.targetId,
+        compatibilityArtifact.targetId,
+      ]),
+    });
+    expect(frozen.acceptedArtifacts).toHaveLength(1);
+    expect(evaluation).toMatchObject({
+      outcome: "completed",
+      hardGatesPassed: true,
+    });
+    expect(environment.progress()).toMatchObject({
+      eligibleArtifacts: 2,
+      integratedArtifacts: 1,
+      goalSatisfied: true,
+    });
+  });
+
+  it("uses an agent-free verifier for a one-member independent-search world", async () => {
+    const config = fixture();
+    config.condition = "independent";
+    config.goal = {
+      id: "independent-repair",
+      statement: "Repair the pinned task independently",
+      success: {
+        requiredTaskIds: ["bug-add"],
+        minimumEligibleArtifacts: 1,
+      },
+      budget: {
+        maxActions: 32,
+        maxVerificationRuns: 4,
+        maxWrites: 20,
+        maxAttempts: 1,
+      },
+      stop: {
+        successSustainedForCheckpoints: 1,
+        noProgressTicks: 8,
+        checkpointInterval: 1,
+      },
+    };
+    const environment = await RepositoryEnvironment.create(config);
+    environment.config.readOnly = false;
+    const candidateParent = mkdtempSync(
+      join(tmpdir(), "swarm-world-independent-test-"),
+    );
+    const candidateWorktree = join(candidateParent, "checkout");
+    execFileSync("git", [
+      "-C",
+      config.root,
+      "worktree",
+      "add",
+      "--detach",
+      candidateWorktree,
+      config.baseCommit,
+    ]);
+    (
+      environment as unknown as { candidateWorktree: string }
+    ).candidateWorktree = candidateWorktree;
+    environment.createAgent("independent-agent");
+    const observation = await environment.observe({
+      agentId: "independent-agent",
+    });
+    const math = observation.nodes.find((node) => node.path === "math.ts")!;
+    const inspected = await environment.resolve({
+      agentId: "independent-agent",
+      action: { type: "INSPECT", nodeId: math.id },
+    });
+    expect(
+      await environment.resolve({
+        agentId: "independent-agent",
+        action: { type: "CLAIM_TASK", taskId: "bug-add" },
+      }),
+    ).toMatchObject({ accepted: true });
+    const recipe = await environment.resolve({
+      agentId: "independent-agent",
+      action: {
+        type: "FORMULATE",
+        taskId: "bug-add",
+        evidenceIds: inspected.evidenceIds,
+        targets: ["math.ts"],
+        requiredFacilities: ["acceptance"],
+      },
+    });
+    await environment.resolve({
+      agentId: "independent-agent",
+      action: {
+        type: "EDIT",
+        recipeId: recipe.targetId!,
+        path: "math.ts",
+        expectedContentHash: math.contentHash!,
+        content: "export const add = (a: number, b: number) => a + b;\n",
+      },
+    });
+    await environment.resolve({
+      agentId: "independent-agent",
+      action: {
+        type: "RUN_CHECK",
+        recipeId: recipe.targetId!,
+        facilityId: "acceptance",
+      },
+    });
+    const artifact = await environment.resolve({
+      agentId: "independent-agent",
+      action: { type: "CONSTRUCT_ARTIFACT", recipeId: recipe.targetId! },
+    });
+    expect(
+      await environment.resolve({
+        agentId: "independent-agent",
+        action: {
+          type: "REQUEST_VERIFICATION",
+          artifactId: artifact.targetId!,
+        },
+      }),
+    ).toMatchObject({ accepted: true });
+    expect(
+      (await environment.observe({ agentId: "independent-agent" }))
+        .verifications,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          artifactId: artifact.targetId,
+          verifierAgentId: "environment-verifier",
+          success: true,
+        }),
+      ]),
+    );
+    await environment.resolve({
+      agentId: "independent-agent",
+      action: { type: "REQUEST_INTEGRATION", artifactId: artifact.targetId! },
+    });
+    await environment.advance();
+    expect(
+      await environment.evaluate(await environment.freeze()),
+    ).toMatchObject({
+      outcome: "completed",
+    });
   });
 });

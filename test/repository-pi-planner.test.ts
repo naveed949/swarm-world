@@ -120,7 +120,10 @@ describe("Pi repository planner", () => {
       requestContext = input.context;
       return { actions: [{ type: "INSPECT", nodeId: "file" }] };
     };
-    const planner = createPiRepositoryPlanner(config, request);
+    const planner = createPiRepositoryPlanner(
+      { ...config, coordinationModel: "emergent-society" },
+      request,
+    );
 
     await expect(
       planner.plan({ agentId: "agent_000000", tick: 2, observation }),
@@ -131,7 +134,7 @@ describe("Pi repository planner", () => {
     );
   });
 
-  it("fails closed when a collaborator proposes a write", async () => {
+  it("fails closed when an uncommitted agent proposes a write", async () => {
     const request: RepositoryPlanRequest = async () => ({
       actions: [
         {
@@ -148,6 +151,57 @@ describe("Pi repository planner", () => {
     await expect(
       planner.plan({ agentId: "agent_000001", tick: 2, observation }),
     ).resolves.toEqual([{ type: "WAIT" }]);
+  });
+
+  it("allows any agent with a temporary commitment to implement", async () => {
+    const request: RepositoryPlanRequest = async (input) => {
+      expect(input.role).toBe("compatibility-implementer");
+      return {
+        actions: [
+          {
+            type: "FORMULATE",
+            taskId: "sandcastle-issue-26",
+            evidenceIds: ["evidence"],
+            targets: ["src/Publisher.ts"],
+            requiredFacilities: ["focused"],
+          },
+        ],
+      };
+    };
+    const planner = createPiRepositoryPlanner(
+      { ...config, coordinationModel: "emergent-society" },
+      request,
+    );
+
+    await expect(
+      planner.plan({
+        agentId: "agent_000001",
+        tick: 2,
+        observation: {
+          ...observation,
+          affordances: [...observation.affordances, "FORMULATE"],
+          commitments: [
+            {
+              id: "commitment",
+              agentId: "agent_000001",
+              taskId: "sandcastle-issue-26",
+              approach: "compatibility layer",
+              roleLabel: "compatibility-implementer",
+              intendedContribution: "Preserve callers",
+              exitCondition: "Candidate submitted",
+              createdAtTick: 1,
+              leaseExpiresAtTick: 10,
+              status: "active",
+            },
+          ],
+        },
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        type: "FORMULATE",
+        taskId: "sandcastle-issue-26",
+      }),
+    ]);
   });
 
   it("surfaces provider failures instead of silently spending the run waiting", async () => {

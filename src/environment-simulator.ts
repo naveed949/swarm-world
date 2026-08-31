@@ -26,6 +26,7 @@ export interface EnvironmentSimulatorEvent<Action> {
 /** Domain-neutral scheduling core. All consequences remain environment-owned. */
 export class EnvironmentSimulator<Observation, Action, Frozen, Evaluation> {
   tick = 0;
+  modelCalls = 0;
   readonly events: Array<EnvironmentSimulatorEvent<Action>> = [];
   private readonly queues = new Map<string, Action[]>();
   private readonly orderedAgentIds: string[];
@@ -61,6 +62,7 @@ export class EnvironmentSimulator<Observation, Action, Frozen, Evaluation> {
           }),
         })),
       );
+      this.modelCalls += due.length;
       for (const proposal of proposals)
         this.queues.set(
           proposal.agentId,

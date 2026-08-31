@@ -16,6 +16,11 @@ export interface RepositoryRunConfig {
   macroturnInterval: number;
   planLimit: number;
   condition: Condition;
+  coordinationModel?:
+    | "emergent-society"
+    | "fixed-workflow"
+    | "central-supervisor"
+    | "independent-search";
   planner?: "wait" | "survey" | "scripted" | "pi";
   model?: {
     provider: string;
@@ -73,6 +78,14 @@ const repositoryRunSchema = z
     condition: z
       .enum(["full", "no-communication", "no-explicit-culture", "independent"])
       .default("full"),
+    coordinationModel: z
+      .enum([
+        "emergent-society",
+        "fixed-workflow",
+        "central-supervisor",
+        "independent-search",
+      ])
+      .optional(),
     planner: z.enum(["wait", "survey", "scripted", "pi"]).default("wait"),
     model: z
       .object({
@@ -107,6 +120,29 @@ const repositoryRunSchema = z
         relevantPaths: z.array(z.string()).min(1),
         priority: z.number().int().default(0),
       }),
+      goal: z
+        .object({
+          id: z.string().min(1),
+          statement: z.string().min(1),
+          success: z.object({
+            requiredTaskIds: z.array(z.string()).optional(),
+            minimumEligibleArtifacts: z.number().int().nonnegative().optional(),
+            mandatoryChecksPass: z.boolean().optional(),
+          }),
+          budget: z.object({
+            maxActions: z.number().int().positive(),
+            maxVerificationRuns: z.number().int().positive(),
+            maxWrites: z.number().int().positive(),
+            maxAttempts: z.number().int().positive(),
+            maxModelCalls: z.number().int().positive().optional(),
+          }),
+          stop: z.object({
+            successSustainedForCheckpoints: z.number().int().positive(),
+            noProgressTicks: z.number().int().positive(),
+            checkpointInterval: z.number().int().positive(),
+          }),
+        })
+        .optional(),
       observationRadius: z.number().int().nonnegative().default(2),
       observationLimit: z.number().int().positive().default(64),
       allowedPaths: z.array(z.string()).min(1),
@@ -177,7 +213,7 @@ export async function loadRunConfig(path: string): Promise<RunConfig> {
   )
     return { type: "biofoundry", config: await loadConfig(path) };
   const parsed = repositoryRunSchema.parse(source);
-  const { type: _, ...environment } = parsed.environment;
+  const { type: _, goal, ...environment } = parsed.environment;
   void _;
   return {
     type: "repository",
@@ -188,6 +224,9 @@ export async function loadRunConfig(path: string): Promise<RunConfig> {
       macroturnInterval: parsed.macroturnInterval,
       planLimit: parsed.planLimit,
       condition: parsed.condition,
+      ...(parsed.coordinationModel
+        ? { coordinationModel: parsed.coordinationModel }
+        : {}),
       planner: parsed.planner,
       ...(parsed.model ? { model: parsed.model } : {}),
       surveyQueries: parsed.surveyQueries,
@@ -196,6 +235,7 @@ export async function loadRunConfig(path: string): Promise<RunConfig> {
         : {}),
       environment: {
         ...environment,
+        ...(goal ? { goal } : {}),
         root: resolve(dirname(path), environment.root),
         condition: parsed.condition,
         facilities: environment.facilities as RepositoryFacility[],

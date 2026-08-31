@@ -27,6 +27,7 @@ import type {
   RepositoryAction,
   RepositoryAgent,
   RepositoryArtifact,
+  RepositoryCommitment,
   RepositoryEdge,
   RepositoryEdgeType,
   RepositoryEnvironmentConfig,
@@ -37,7 +38,12 @@ import type {
   RepositoryNode,
   RepositoryNodeType,
   RepositoryObservation,
+  RepositoryProblem,
   RepositoryRecipe as Recipe,
+  RepositorySelection,
+  RepositoryTask,
+  RepositoryTaskProposal,
+  RepositoryVerification,
 } from "./repository-types.js";
 
 export type {
@@ -82,9 +88,15 @@ export class RepositoryEnvironment implements Environment<
   private readonly evidence = new Map<string, Evidence>();
   private readonly recipes = new Map<string, Recipe>();
   private readonly artifacts = new Map<string, RepositoryArtifact>();
+  private readonly problems = new Map<string, RepositoryProblem>();
+  private readonly taskProposals = new Map<string, RepositoryTaskProposal>();
+  private readonly commitments = new Map<string, RepositoryCommitment>();
+  private readonly verifications = new Map<string, RepositoryVerification>();
+  private readonly verificationRequests = new Set<string>();
+  private readonly verificationChallenges = new Map<string, string[]>();
+  private readonly candidateRecommendations = new Map<string, Set<string>>();
   private readonly integrationQueue = new Set<string>();
   private readonly integratedArtifactIds = new Set<string>();
-  private readonly taskClaims = new Map<string, string>();
   private readonly messages: RepositoryObservation["messages"] = [];
   private readonly findings: RepositoryObservation["findings"] = [];
   private readonly facilityActive = new Map<string, number>();
@@ -96,6 +108,11 @@ export class RepositoryEnvironment implements Environment<
   private readonly root: string;
   private candidateCommit: string;
   private candidateWorktree = "";
+  private selection?: RepositorySelection;
+  private tick = 0;
+  private actionsUsed = 0;
+  private verificationRunsUsed = 0;
+  private writesUsed = 0;
 
   private constructor(
     readonly config: RepositoryEnvironmentConfig,
@@ -169,21 +186,75 @@ export class RepositoryEnvironment implements Environment<
   createAgent(id: string): { id: string } {
     if (this.agents.has(id)) throw new Error(`Agent already exists: ${id}`);
     const task = [...this.nodes.values()].find((node) => node.type === "task")!;
+    const budget = this.config.goal?.budget;
     this.agents.set(id, {
       id,
       focusNodeId: task.id,
       evidence: new Set(),
       observedNodes: new Set([task.id]),
       inheritedArtifacts: new Set(),
-      actionsRemaining: 128,
-      verificationRemaining: 32,
-      writesRemaining: this.config.patch.maxChangedLines,
+      actionsRemaining: budget?.maxActions ?? 128,
+      verificationRemaining: budget?.maxVerificationRuns ?? 32,
+      writesRemaining: Math.min(
+        budget?.maxWrites ?? this.config.patch.maxChangedLines,
+        this.config.patch.maxChangedLines,
+      ),
     });
     return { id };
   }
 
   traceEvents() {
     return this.trace.snapshot();
+  }
+
+  progress(): {
+    tick: number;
+    fingerprint: string;
+    eligibleArtifacts: number;
+    integratedArtifacts: number;
+    goalSatisfied: boolean;
+  } {
+    const eligibleArtifacts = [...this.artifacts.values()].filter((artifact) =>
+      this.artifactEligible(artifact),
+    ).length;
+    const integratedArtifacts = this.integratedArtifactIds.size;
+    const requiredTaskIds = this.config.goal?.success.requiredTaskIds ?? [];
+    const completedTaskIds = new Set(
+      [...this.artifacts.values()]
+        .filter((artifact) => this.integratedArtifactIds.has(artifact.id))
+        .flatMap((artifact) => artifact.taskIds),
+    );
+    const goalSatisfied =
+      integratedArtifacts > 0 &&
+      requiredTaskIds.every((taskId) => completedTaskIds.has(taskId)) &&
+      eligibleArtifacts >=
+        (this.config.goal?.success.minimumEligibleArtifacts ?? 1);
+    return {
+      tick: this.tick,
+      fingerprint: sha256({
+        eligibleArtifacts,
+        integratedArtifacts,
+        problems: [...this.problems.values()].map(({ id, status }) => ({
+          id,
+          status,
+        })),
+        tasks: [...this.taskProposals.values()].map(({ id, status }) => ({
+          id,
+          status,
+        })),
+        commitments: [...this.commitments.values()].map(({ id, status }) => ({
+          id,
+          status,
+        })),
+        artifacts: [...this.artifacts.values()].map(({ id, status }) => ({
+          id,
+          status,
+        })),
+      }),
+      eligibleArtifacts,
+      integratedArtifacts,
+      goalSatisfied,
+    };
   }
 
   async observe({
@@ -209,6 +280,10 @@ export class RepositoryEnvironment implements Environment<
     }
     const nodePriority: Record<RepositoryNodeType, number> = {
       task: 0,
+      problem: 0,
+      task_proposal: 0,
+      commitment: 1,
+      verification: 2,
       file: 1,
       test: 1,
       facility: 2,
@@ -307,8 +382,9 @@ export class RepositoryEnvironment implements Environment<
         .map((artifact) => artifact.id)
         .sort(),
       taskClaims: caps.taskClaims
-        ? [...this.taskClaims]
-            .map(([taskId, claimedBy]) => ({ taskId, agentId: claimedBy }))
+        ? [...this.commitments.values()]
+            .filter((commitment) => commitment.status === "active")
+            .map(({ taskId, agentId }) => ({ taskId, agentId }))
             .sort((a, b) => a.taskId.localeCompare(b.taskId))
         : [],
       messages: caps.communication
@@ -320,12 +396,65 @@ export class RepositoryEnvironment implements Environment<
       inheritedArtifactIds: caps.crossAgentPrograms
         ? [...agent.inheritedArtifacts].sort()
         : [],
+      ...(this.config.goal ? { goal: structuredClone(this.config.goal) } : {}),
+      problems: structuredClone(
+        [...this.problems.values()].sort((a, b) => a.id.localeCompare(b.id)),
+      ),
+      taskProposals: structuredClone(
+        [...this.taskProposals.values()].sort((a, b) =>
+          a.id.localeCompare(b.id),
+        ),
+      ),
+      commitments: structuredClone(
+        [...this.commitments.values()].sort((a, b) => a.id.localeCompare(b.id)),
+      ),
+      candidates: [...this.artifacts.values()]
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .map((artifact) => ({
+          artifactId: artifact.id,
+          authorId: artifact.authorId,
+          taskIds: [...artifact.taskIds],
+          patchHash: artifact.patchHash,
+          verificationFacilityIds: this.artifactVerifications(artifact.id)
+            .filter((verification) => verification.success)
+            .map((verification) => verification.facilityId)
+            .sort(),
+          verificationRequested: this.verificationRequests.has(artifact.id),
+          eligible: this.artifactEligible(artifact),
+        })),
+      verifications: structuredClone(
+        [...this.verifications.values()].sort((a, b) =>
+          a.id.localeCompare(b.id),
+        ),
+      ),
+      ...(this.selection ? { selection: structuredClone(this.selection) } : {}),
       affordances: this.affordances(),
       budgets: {
         context: this.config.observationLimit,
         actions: agent.actionsRemaining,
         verification: agent.verificationRemaining,
         writes: agent.writesRemaining,
+        ...(this.config.goal
+          ? {
+              globalActions: Math.max(
+                0,
+                this.config.goal.budget.maxActions - this.actionsUsed,
+              ),
+              globalVerification: Math.max(
+                0,
+                this.config.goal.budget.maxVerificationRuns -
+                  this.verificationRunsUsed,
+              ),
+              globalWrites: Math.max(
+                0,
+                this.config.goal.budget.maxWrites - this.writesUsed,
+              ),
+              attempts: Math.max(
+                0,
+                this.config.goal.budget.maxAttempts - this.commitments.size,
+              ),
+            }
+          : {}),
       },
     };
   }
@@ -351,8 +480,18 @@ export class RepositoryEnvironment implements Environment<
     action: RepositoryAction;
   }): Promise<EnvironmentResolution> {
     const agent = this.agent(agentId);
+    if (
+      this.config.goal &&
+      this.actionsUsed >= this.config.goal.budget.maxActions
+    )
+      return this.reject(
+        agentId,
+        action.type,
+        "global action budget exhausted",
+      );
     if (agent.actionsRemaining <= 0)
       return this.reject(agentId, action.type, "budget exhausted");
+    this.actionsUsed++;
     agent.actionsRemaining--;
     try {
       switch (action.type) {
@@ -380,21 +519,49 @@ export class RepositoryEnvironment implements Environment<
         case "SEARCH":
           return this.search(agent, action.query, action.paths);
         case "CLAIM_TASK":
-          if (!capabilities(this.config.condition ?? "full").taskClaims)
+          if (
+            !capabilities(this.config.condition ?? "full").taskClaims &&
+            this.config.condition !== "independent"
+          )
             return this.reject(
               agentId,
               action.type,
               "task claims disabled by treatment",
             );
-          if (action.taskId !== this.config.task.id)
+          if (!this.taskById(action.taskId))
             return this.reject(agentId, action.type, "task unavailable");
-          if (
-            this.taskClaims.has(action.taskId) &&
-            this.taskClaims.get(action.taskId) !== agent.id
-          )
-            return this.reject(agentId, action.type, "task already claimed");
-          this.taskClaims.set(action.taskId, agent.id);
-          return this.accept(agentId, action.type, action.taskId);
+          return this.createCommitment(
+            agent,
+            {
+              taskId: action.taskId,
+              approach: `default-${agent.id}`,
+              roleLabel: "implementer",
+              intendedContribution: "Implement and verify a candidate",
+              exitCondition: "A candidate artifact is submitted",
+              leaseTicks: 16,
+            },
+            action.type,
+          );
+        case "PROPOSE_PROBLEM":
+          return this.proposeProblem(agent, action);
+        case "CONFIRM_PROBLEM":
+          return this.confirmProblem(
+            agent,
+            action.problemId,
+            action.evidenceIds,
+          );
+        case "CHALLENGE_PROBLEM":
+          return this.challengeProblem(agent, action);
+        case "PROPOSE_TASK":
+          return this.proposeTask(agent, action);
+        case "DECOMPOSE_TASK":
+          return this.decomposeTask(agent, action);
+        case "CLAIM_COMMITMENT":
+          return this.createCommitment(agent, action, action.type);
+        case "JOIN_COMMITMENT":
+          return this.joinCommitment(agent, action);
+        case "RELEASE_COMMITMENT":
+          return this.releaseCommitment(agent, action.commitmentId);
         case "COMMUNICATE":
           if (!capabilities(this.config.condition ?? "full").communication)
             return this.reject(
@@ -470,6 +637,40 @@ export class RepositoryEnvironment implements Environment<
           return await this.runCheck(agent, action.recipeId, action.facilityId);
         case "CONSTRUCT_ARTIFACT":
           return await this.constructArtifact(agent, action.recipeId);
+        case "REQUEST_VERIFICATION": {
+          const artifact = this.artifacts.get(action.artifactId);
+          if (!artifact)
+            return this.reject(agentId, action.type, "artifact unavailable");
+          if (this.config.condition === "independent") {
+            const requiredRuns = this.config.facilities.filter(
+              (facility) =>
+                facility.mandatory && facility.category !== "hidden",
+            ).length;
+            if (
+              this.config.goal &&
+              this.verificationRunsUsed + requiredRuns >
+                this.config.goal.budget.maxVerificationRuns
+            )
+              return this.reject(
+                agentId,
+                action.type,
+                "global verification budget exhausted",
+              );
+            this.verificationRequests.add(artifact.id);
+            await this.verifyArtifactAsEngine(artifact);
+          } else this.verificationRequests.add(artifact.id);
+          return this.accept(agentId, action.type, artifact.id);
+        }
+        case "VERIFY_ARTIFACT":
+          return await this.verifyArtifact(
+            agent,
+            action.artifactId,
+            action.facilityId,
+          );
+        case "CHALLENGE_VERIFICATION":
+          return this.challengeVerification(agent, action);
+        case "RECOMMEND_CANDIDATE":
+          return this.recommendCandidate(agent, action.artifactId);
         case "PUBLISH_FINDING":
           if (!capabilities(this.config.condition ?? "full").publication)
             return this.reject(
@@ -497,7 +698,37 @@ export class RepositoryEnvironment implements Environment<
         case "REQUEST_INTEGRATION":
           if (!this.artifacts.has(action.artifactId))
             return this.reject(agentId, action.type, "artifact unavailable");
-          this.integrationQueue.add(action.artifactId);
+          if (!this.artifactEligible(this.artifacts.get(action.artifactId)!))
+            return this.reject(
+              agentId,
+              action.type,
+              "artifact lacks independent verification",
+            );
+          if (
+            this.config.goal &&
+            [...this.artifacts.values()].some(
+              (artifact) => !this.artifactVerificationComplete(artifact),
+            )
+          )
+            return this.reject(
+              agentId,
+              action.type,
+              "candidate portfolio verification incomplete",
+            );
+          if (
+            this.config.goal &&
+            [...this.artifacts.values()].filter((artifact) =>
+              this.artifactEligible(artifact),
+            ).length < (this.config.goal.success.minimumEligibleArtifacts ?? 1)
+          )
+            return this.reject(
+              agentId,
+              action.type,
+              "minimum eligible candidate portfolio not reached",
+            );
+          for (const artifact of this.artifacts.values())
+            if (this.artifactEligible(artifact))
+              this.integrationQueue.add(artifact.id);
           return this.accept(agentId, action.type, action.artifactId);
       }
     } catch (error) {
@@ -510,10 +741,31 @@ export class RepositoryEnvironment implements Environment<
   }
 
   async advance(): Promise<void> {
-    const ordered = [...this.integrationQueue]
+    this.tick++;
+    for (const commitment of this.commitments.values())
+      if (
+        commitment.status === "active" &&
+        commitment.leaseExpiresAtTick <= this.tick
+      ) {
+        commitment.status = "expired";
+        this.record(
+          "commitment_expired",
+          true,
+          commitment.agentId,
+          commitment.id,
+          {
+            taskId: commitment.taskId,
+          },
+        );
+      }
+    const eligible = [...this.integrationQueue]
       .map((id) => this.artifacts.get(id)!)
+      .filter((artifact) => this.artifactEligible(artifact))
       .sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
-    for (const artifact of ordered) {
+    if (!eligible.length) return;
+    const artifact = this.selectCandidate(eligible);
+    this.integrationQueue.clear();
+    {
       try {
         const commitDate = await this.commitDate(artifact.commit);
         await run(
@@ -536,6 +788,9 @@ export class RepositoryEnvironment implements Environment<
           )
         ).stdout.trim();
         this.integratedArtifactIds.add(artifact.id);
+        artifact.status = "accepted";
+        for (const candidate of eligible)
+          if (candidate.id !== artifact.id) candidate.status = "superseded";
         await this.refreshContentIdentities();
         this.record("artifact_integrated", true, undefined, artifact.id, {
           candidateCommit: this.candidateCommit,
@@ -551,7 +806,6 @@ export class RepositoryEnvironment implements Environment<
           reason: error instanceof Error ? error.message : String(error),
         });
       }
-      this.integrationQueue.delete(artifact.id);
     }
   }
 
@@ -568,6 +822,10 @@ export class RepositoryEnvironment implements Environment<
           .sort((a, b) => a.id.localeCompare(b.id)),
       ),
       task: structuredClone(this.config.task),
+      ...(this.config.goal ? { goal: structuredClone(this.config.goal) } : {}),
+      ...(this.selection ? { selection: structuredClone(this.selection) } : {}),
+      problems: structuredClone([...this.problems.values()]),
+      taskProposals: structuredClone([...this.taskProposals.values()]),
     };
   }
 
@@ -637,8 +895,18 @@ export class RepositoryEnvironment implements Environment<
       ids.filter(
         (id) => checks.find((check) => check.facilityId === id)?.success,
       ).length / ids.length;
-    const correctness = gateScore(frozen.task.acceptanceFacilityIds);
-    const regressionSafety = gateScore(frozen.task.regressionFacilityIds);
+    const evaluatedTasks = unique(
+      frozen.acceptedArtifacts.flatMap((artifact) => artifact.taskIds),
+    )
+      .map((taskId) => this.taskById(taskId))
+      .filter((task): task is RepositoryTask => task !== undefined);
+    if (!evaluatedTasks.length) evaluatedTasks.push(frozen.task);
+    const correctness = gateScore(
+      unique(evaluatedTasks.flatMap((task) => task.acceptanceFacilityIds)),
+    );
+    const regressionSafety = gateScore(
+      unique(evaluatedTasks.flatMap((task) => task.regressionFacilityIds)),
+    );
     const maintainability = score([
       "format",
       "build",
@@ -651,13 +919,17 @@ export class RepositoryEnvironment implements Environment<
     );
     const robustness = hidden.length ? score(["hidden"]) : 1;
     const issueCoverage = hasArtifact
-      ? frozen.acceptedArtifacts.some(
-          (artifact) =>
-            artifact.taskIds.includes(frozen.task.id) &&
-            artifact.touchedNodes.some((nodeId) => {
-              const path = this.nodes.get(nodeId)?.path;
-              return path ? frozen.task.relevantPaths.includes(path) : false;
-            }),
+      ? frozen.acceptedArtifacts.some((artifact) =>
+          artifact.taskIds.some((taskId) => {
+            const task = this.taskById(taskId);
+            return (
+              task !== undefined &&
+              artifact.touchedNodes.some((nodeId) => {
+                const path = this.nodes.get(nodeId)?.path;
+                return path ? task.relevantPaths.includes(path) : false;
+              })
+            );
+          }),
         )
         ? 1
         : 0
@@ -968,20 +1240,30 @@ export class RepositoryEnvironment implements Environment<
   ): Promise<EnvironmentResolution> {
     if (this.config.readOnly ?? true)
       return this.reject(agent.id, action.type, "permission blocked");
-    if (
-      action.taskId !== this.config.task.id ||
-      !this.owns(agent, action.evidenceIds)
-    )
+    const task = this.taskById(action.taskId);
+    if (!task || !this.owns(agent, action.evidenceIds))
       return this.reject(
         agent.id,
         action.type,
         "recipe cites unavailable task or evidence",
       );
     if (
+      this.config.goal &&
+      ![...this.commitments.values()].some(
+        (commitment) =>
+          commitment.agentId === agent.id &&
+          commitment.taskId === action.taskId &&
+          commitment.status === "active",
+      )
+    )
+      return this.reject(
+        agent.id,
+        action.type,
+        "an active task commitment is required",
+      );
+    if (
       action.targets.some((path) => !this.permitted(path)) ||
-      action.targets.some(
-        (path) => !this.config.task.relevantPaths.includes(path),
-      ) ||
+      action.targets.some((path) => !task.relevantPaths.includes(path)) ||
       action.targets.some(
         (path) =>
           ![...agent.observedNodes].some(
@@ -1064,11 +1346,14 @@ export class RepositoryEnvironment implements Environment<
     if (
       stats.files > this.config.patch.maxFiles ||
       stats.lines > this.config.patch.maxChangedLines ||
-      stats.lines > agent.writesRemaining
+      stats.lines > agent.writesRemaining ||
+      (this.config.goal !== undefined &&
+        this.writesUsed + stats.lines > this.config.goal.budget.maxWrites)
     ) {
       await writeFile(target, current, "utf8");
       return this.reject(agent.id, actionType, "patch budget exceeded");
     }
+    this.writesUsed += stats.lines;
     agent.writesRemaining = this.config.patch.maxChangedLines - stats.lines;
     recipe.patchHash = await this.patchHash(recipe.worktree);
     recipe.checks.clear();
@@ -1118,7 +1403,17 @@ export class RepositoryEnvironment implements Environment<
       return this.reject(agent.id, "RUN_CHECK", "facility capacity exhausted");
     if (agent.verificationRemaining <= 0)
       return this.reject(agent.id, "RUN_CHECK", "budget exhausted");
+    if (
+      this.config.goal &&
+      this.verificationRunsUsed >= this.config.goal.budget.maxVerificationRuns
+    )
+      return this.reject(
+        agent.id,
+        "RUN_CHECK",
+        "global verification budget exhausted",
+      );
     agent.verificationRemaining--;
+    this.verificationRunsUsed++;
     this.facilityActive.set(
       facility.id,
       (this.facilityActive.get(facility.id) ?? 0) + 1,
@@ -1135,10 +1430,11 @@ export class RepositoryEnvironment implements Environment<
         })
       ).stdout.trim();
       result = await this.executeFacility(facility, recipe.worktree);
+      const recipeTask = this.taskById(recipe.taskId)!;
       const unauthorized = (await this.changedPaths(recipe.worktree)).filter(
         (path) =>
           !recipe.targets.includes(path) ||
-          !this.config.task.relevantPaths.includes(path) ||
+          !recipeTask.relevantPaths.includes(path) ||
           !this.permitted(path),
       );
       if (unauthorized.length) {
@@ -1236,11 +1532,12 @@ export class RepositoryEnvironment implements Environment<
         "mandatory checks are missing or stale",
       );
     const changed = await this.changedPaths(recipe.worktree);
+    const recipeTask = this.taskById(recipe.taskId)!;
     if (
       changed.some(
         (path) =>
           !recipe.targets.includes(path) ||
-          !this.config.task.relevantPaths.includes(path) ||
+          !recipeTask.relevantPaths.includes(path) ||
           !this.permitted(path),
       )
     )
@@ -1249,6 +1546,7 @@ export class RepositoryEnvironment implements Environment<
         "CONSTRUCT_ARTIFACT",
         "artifact contains unauthorized paths",
       );
+    const artifactStats = await this.diffStats(recipe.worktree);
     await run("git", ["-C", recipe.worktree, "add", "--", ...changed]);
     const commitDate = await this.commitDate(recipe.baseCommit);
     await run(
@@ -1281,6 +1579,12 @@ export class RepositoryEnvironment implements Environment<
       ...recipe.evidenceIds,
       ...recipe.checks.values(),
     ]).sort();
+    const commitment = [...this.commitments.values()].find(
+      (candidate) =>
+        candidate.agentId === agent.id &&
+        candidate.taskId === recipe.taskId &&
+        candidate.status === "active",
+    );
     const artifactData = {
       commit,
       baseCommit: recipe.baseCommit,
@@ -1294,13 +1598,28 @@ export class RepositoryEnvironment implements Environment<
       touchedNodes,
       patchHash: recipe.patchHash,
       evidenceIds,
-      priority: this.config.task.priority,
+      priority: recipeTask.priority,
+      ...(commitment
+        ? {
+            approach: commitment.approach,
+            hypothesis: commitment.intendedContribution,
+          }
+        : {}),
+      changedLines: artifactStats.lines,
+      status: "submitted" as const,
     };
     const artifact: RepositoryArtifact = {
       id: `artifact_${sha256(artifactData).slice(0, 24)}`,
       ...artifactData,
     };
     this.artifacts.set(artifact.id, artifact);
+    for (const commitment of this.commitments.values())
+      if (
+        commitment.agentId === agent.id &&
+        commitment.taskId === recipe.taskId &&
+        commitment.status === "active"
+      )
+        commitment.status = "completed";
     const node = this.node(
       "accepted_artifact",
       artifact.id,
@@ -1316,6 +1635,661 @@ export class RepositoryEnvironment implements Environment<
       artifact.id,
       evidenceIds,
     );
+  }
+
+  private taskById(id: string): RepositoryTask | undefined {
+    if (id === this.config.task.id) return this.config.task;
+    const proposal = this.taskProposals.get(id);
+    return proposal?.status === "admitted" ? proposal : undefined;
+  }
+
+  private proposeProblem(
+    agent: RepositoryAgent,
+    action: Extract<RepositoryAction, { type: "PROPOSE_PROBLEM" }>,
+  ): EnvironmentResolution {
+    if (!this.owns(agent, action.evidenceIds) || !action.statement.trim())
+      return this.reject(
+        agent.id,
+        action.type,
+        "problem requires owned evidence",
+      );
+    const id = `problem_${sha256({ statement: action.statement, evidenceIds: [...action.evidenceIds].sort() }).slice(0, 20)}`;
+    if (this.problems.has(id))
+      return this.reject(agent.id, action.type, "duplicate problem");
+    const problem: RepositoryProblem = {
+      id,
+      authorAgentId: agent.id,
+      statement: action.statement,
+      evidenceIds: [...action.evidenceIds],
+      goalImpact: action.goalImpact,
+      status: "proposed",
+      confirmations: [],
+      challenges: [],
+    };
+    this.problems.set(id, problem);
+    const node = this.node("problem", id, action.statement.slice(0, 120));
+    this.edge(this.taskNodeId(), node.id, "task_relevance");
+    return this.accept(agent.id, action.type, id, action.evidenceIds);
+  }
+
+  private confirmProblem(
+    agent: RepositoryAgent,
+    problemId: string,
+    evidenceIds: string[],
+  ): EnvironmentResolution {
+    const problem = this.problems.get(problemId);
+    if (!problem || problem.authorAgentId === agent.id)
+      return this.reject(
+        agent.id,
+        "CONFIRM_PROBLEM",
+        "independent confirmation required",
+      );
+    if (!this.owns(agent, evidenceIds))
+      return this.reject(
+        agent.id,
+        "CONFIRM_PROBLEM",
+        "confirmation requires owned evidence",
+      );
+    if (!problem.confirmations.includes(agent.id))
+      problem.confirmations.push(agent.id);
+    problem.status = "confirmed";
+    return this.accept(agent.id, "CONFIRM_PROBLEM", problemId, evidenceIds);
+  }
+
+  private challengeProblem(
+    agent: RepositoryAgent,
+    action: Extract<RepositoryAction, { type: "CHALLENGE_PROBLEM" }>,
+  ): EnvironmentResolution {
+    const problem = this.problems.get(action.problemId);
+    if (!problem || !this.owns(agent, action.evidenceIds))
+      return this.reject(
+        agent.id,
+        action.type,
+        "challenge requires a problem and owned evidence",
+      );
+    problem.challenges.push({
+      agentId: agent.id,
+      evidenceIds: [...action.evidenceIds],
+      reason: action.reason,
+    });
+    problem.status = "challenged";
+    return this.accept(agent.id, action.type, problem.id, action.evidenceIds);
+  }
+
+  private proposeTask(
+    agent: RepositoryAgent,
+    action: Extract<RepositoryAction, { type: "PROPOSE_TASK" }>,
+  ): EnvironmentResolution {
+    const problem = this.problems.get(action.problemId);
+    const facilities = new Set(
+      this.config.facilities.map((facility) => facility.id),
+    );
+    if (!problem || problem.status !== "confirmed")
+      return this.reject(
+        agent.id,
+        action.type,
+        "task requires a confirmed problem",
+      );
+    if (
+      !action.relevantPaths.length ||
+      !action.acceptanceCriteria.length ||
+      !action.acceptanceFacilityIds.length ||
+      !action.regressionFacilityIds.length ||
+      !action.verificationPlan.length ||
+      action.estimatedCost < 1 ||
+      action.relevantPaths.some((path) => !this.permitted(path)) ||
+      [...action.acceptanceFacilityIds, ...action.regressionFacilityIds].some(
+        (id) => !facilities.has(id),
+      ) ||
+      action.acceptanceFacilityIds.some(
+        (id) =>
+          !this.config.facilities.some(
+            (facility) =>
+              facility.id === id &&
+              (facility.category === "test" || facility.category === "hidden"),
+          ),
+      )
+    )
+      return this.reject(
+        agent.id,
+        action.type,
+        "task admission policy rejected proposal",
+      );
+    const fingerprint = sha256({
+      objective: action.objective.trim().toLowerCase(),
+      paths: [...action.relevantPaths].sort(),
+    });
+    if (
+      [...this.taskProposals.values()].some(
+        (task) =>
+          sha256({
+            objective: task.objective.trim().toLowerCase(),
+            paths: [...task.relevantPaths].sort(),
+          }) === fingerprint,
+      )
+    )
+      return this.reject(agent.id, action.type, "duplicate task proposal");
+    const id = `task_${fingerprint.slice(0, 20)}`;
+    const task: RepositoryTaskProposal = {
+      id,
+      problemId: problem.id,
+      authorAgentId: agent.id,
+      title: action.objective,
+      objective: action.objective,
+      expectedOutcome: action.expectedOutcome,
+      acceptanceCriteria: [...action.acceptanceCriteria],
+      acceptanceFacilityIds: [...action.acceptanceFacilityIds],
+      regressionFacilityIds: [...action.regressionFacilityIds],
+      relevantPaths: unique(action.relevantPaths).sort(),
+      dependencies: [...action.dependencies],
+      verificationPlan: [...action.verificationPlan],
+      estimatedCost: action.estimatedCost,
+      priority: this.taskProposals.size + 1,
+      status: "admitted",
+    };
+    this.taskProposals.set(id, task);
+    const node = this.node("task_proposal", id, task.title);
+    this.edge(
+      this.nodeIdForStableKey("problem", problem.id),
+      node.id,
+      "task_relevance",
+    );
+    for (const path of task.relevantPaths) {
+      const file = [...this.nodes.values()].find(
+        (candidate) => candidate.path === path,
+      );
+      if (file) this.edge(node.id, file.id, "task_relevance");
+    }
+    return this.accept(agent.id, action.type, id);
+  }
+
+  private decomposeTask(
+    agent: RepositoryAgent,
+    action: Extract<RepositoryAction, { type: "DECOMPOSE_TASK" }>,
+  ): EnvironmentResolution {
+    const parent = this.taskById(action.taskId);
+    if (
+      !parent ||
+      action.relevantPaths.some((path) => !parent.relevantPaths.includes(path))
+    )
+      return this.reject(
+        agent.id,
+        action.type,
+        "decomposition exceeds parent task scope",
+      );
+    const source = this.taskProposals.get(parent.id);
+    const problemId = source?.problemId ?? `seed_${parent.id}`;
+    if (!this.problems.has(problemId))
+      this.problems.set(problemId, {
+        id: problemId,
+        authorAgentId: "operator",
+        statement: parent.title,
+        evidenceIds: [],
+        goalImpact: "Operator-seeded task",
+        status: "confirmed",
+        confirmations: ["operator"],
+        challenges: [],
+      });
+    return this.proposeTask(agent, {
+      type: "PROPOSE_TASK",
+      problemId,
+      objective: action.objective,
+      expectedOutcome: action.objective,
+      relevantPaths: action.relevantPaths,
+      acceptanceCriteria: parent.acceptanceCriteria,
+      acceptanceFacilityIds: parent.acceptanceFacilityIds,
+      regressionFacilityIds: parent.regressionFacilityIds,
+      dependencies: [parent.id],
+      verificationPlan: action.verificationPlan,
+      estimatedCost: action.estimatedCost,
+    });
+  }
+
+  private createCommitment(
+    agent: RepositoryAgent,
+    action: {
+      taskId: string;
+      approach: string;
+      roleLabel: string;
+      intendedContribution: string;
+      exitCondition: string;
+      leaseTicks: number;
+    },
+    actionType: "CLAIM_TASK" | "CLAIM_COMMITMENT",
+  ): EnvironmentResolution {
+    if (
+      !this.taskById(action.taskId) ||
+      action.leaseTicks < 1 ||
+      action.leaseTicks > 128
+    )
+      return this.reject(agent.id, actionType, "invalid commitment");
+    const active = [...this.commitments.values()].filter(
+      (commitment) => commitment.status === "active",
+    );
+    if (
+      active.some(
+        (commitment) =>
+          commitment.agentId === agent.id &&
+          commitment.taskId === action.taskId,
+      )
+    )
+      return this.reject(
+        agent.id,
+        actionType,
+        "agent already committed to task",
+      );
+    if (
+      active.some(
+        (commitment) =>
+          commitment.taskId === action.taskId &&
+          commitment.approach.trim().toLowerCase() ===
+            action.approach.trim().toLowerCase(),
+      )
+    )
+      return this.reject(agent.id, actionType, "duplicate active approach");
+    const maxAttempts = this.config.goal?.budget.maxAttempts;
+    if (maxAttempts !== undefined && this.commitments.size >= maxAttempts)
+      return this.reject(agent.id, actionType, "attempt budget exhausted");
+    const data = {
+      agentId: agent.id,
+      taskId: action.taskId,
+      approach: action.approach,
+      roleLabel: action.roleLabel,
+      intendedContribution: action.intendedContribution,
+      exitCondition: action.exitCondition,
+      createdAtTick: this.tick,
+      leaseExpiresAtTick: this.tick + action.leaseTicks,
+    };
+    const commitment: RepositoryCommitment = {
+      id: `commitment_${sha256(data).slice(0, 20)}`,
+      ...data,
+      status: "active",
+    };
+    this.commitments.set(commitment.id, commitment);
+    const node = this.node("commitment", commitment.id, commitment.roleLabel);
+    this.edge(this.taskNodeFor(commitment.taskId), node.id, "ownership");
+    return this.accept(agent.id, actionType, commitment.id);
+  }
+
+  private joinCommitment(
+    agent: RepositoryAgent,
+    action: Extract<RepositoryAction, { type: "JOIN_COMMITMENT" }>,
+  ): EnvironmentResolution {
+    const parent = this.commitments.get(action.commitmentId);
+    if (!parent || parent.status !== "active" || parent.agentId === agent.id)
+      return this.reject(agent.id, action.type, "commitment unavailable");
+    return this.createCommitment(
+      agent,
+      {
+        taskId: parent.taskId,
+        approach: `${parent.approach}/support/${agent.id}`,
+        roleLabel: action.roleLabel,
+        intendedContribution: `Support ${parent.id}`,
+        exitCondition: parent.exitCondition,
+        leaseTicks: action.leaseTicks,
+      },
+      "CLAIM_COMMITMENT",
+    );
+  }
+
+  private releaseCommitment(
+    agent: RepositoryAgent,
+    id: string,
+  ): EnvironmentResolution {
+    const commitment = this.commitments.get(id);
+    if (
+      !commitment ||
+      commitment.agentId !== agent.id ||
+      commitment.status !== "active"
+    )
+      return this.reject(
+        agent.id,
+        "RELEASE_COMMITMENT",
+        "commitment unavailable",
+      );
+    commitment.status = "released";
+    return this.accept(agent.id, "RELEASE_COMMITMENT", id);
+  }
+
+  private async verifyArtifact(
+    agent: RepositoryAgent,
+    artifactId: string,
+    facilityId: string,
+  ): Promise<EnvironmentResolution> {
+    const artifact = this.artifacts.get(artifactId);
+    const facility = this.config.facilities.find(
+      (candidate) =>
+        candidate.id === facilityId && candidate.category !== "hidden",
+    );
+    if (!artifact || !facility)
+      return this.reject(
+        agent.id,
+        "VERIFY_ARTIFACT",
+        "artifact or facility unavailable",
+      );
+    if (!this.verificationRequests.has(artifact.id))
+      return this.reject(
+        agent.id,
+        "VERIFY_ARTIFACT",
+        "verification was not requested",
+      );
+    if (artifact.authorId === agent.id)
+      return this.reject(
+        agent.id,
+        "VERIFY_ARTIFACT",
+        "authors cannot verify their own artifacts",
+      );
+    if (agent.verificationRemaining <= 0)
+      return this.reject(agent.id, "VERIFY_ARTIFACT", "budget exhausted");
+    if (
+      this.config.goal &&
+      this.verificationRunsUsed >= this.config.goal.budget.maxVerificationRuns
+    )
+      return this.reject(
+        agent.id,
+        "VERIFY_ARTIFACT",
+        "global verification budget exhausted",
+      );
+    agent.verificationRemaining--;
+    this.verificationRunsUsed++;
+    const parent = await mkdtemp(join(tmpdir(), "swarm-world-verification-"));
+    const checkout = join(parent, "checkout");
+    await run("git", [
+      "-C",
+      this.root,
+      "worktree",
+      "add",
+      "--detach",
+      checkout,
+      artifact.commit,
+    ]);
+    let result: Awaited<ReturnType<RepositoryEnvironment["executeFacility"]>>;
+    try {
+      result = await this.executeFacility(facility, checkout);
+    } finally {
+      await run("git", [
+        "-C",
+        this.root,
+        "worktree",
+        "remove",
+        "--force",
+        checkout,
+      ]).catch(() => undefined);
+    }
+    const verificationData = {
+      artifactId,
+      verifierAgentId: agent.id,
+      facilityId,
+      success: result.success,
+      outputDigest: result.outputDigest,
+      revision: artifact.commit,
+      facilityPolicyHash: this.facilityPolicyHash(),
+      recommendation: result.success
+        ? ("accept" as const)
+        : ("revise" as const),
+    };
+    const verification: RepositoryVerification = {
+      id: `verification_${sha256(verificationData).slice(0, 24)}`,
+      ...verificationData,
+    };
+    this.verifications.set(verification.id, verification);
+    const evidence = this.makeEvidence(
+      agent.id,
+      "independent_verification",
+      artifact.commit,
+      { ...verificationData, output: result.output },
+      result.outputDigest,
+    );
+    this.trace.appendFacilityCompleted(agent.id, evidence.id, {
+      facilityId,
+      success: result.success,
+      exitCode: result.exitCode,
+      outputDigest: result.outputDigest,
+      output: result.output,
+    });
+    const node = this.node(
+      "verification",
+      verification.id,
+      `${facilityId}: ${verification.recommendation}`,
+    );
+    this.edge(artifact.id, node.id, "test_relation");
+    if (this.artifactEligible(artifact)) artifact.status = "eligible";
+    return result.success
+      ? this.accept(agent.id, "VERIFY_ARTIFACT", verification.id, [evidence.id])
+      : this.reject(
+          agent.id,
+          "VERIFY_ARTIFACT",
+          "independent verification failed",
+          [evidence.id],
+        );
+  }
+
+  private async verifyArtifactAsEngine(
+    artifact: RepositoryArtifact,
+  ): Promise<void> {
+    const facilities = this.config.facilities.filter(
+      (facility) => facility.mandatory && facility.category !== "hidden",
+    );
+    const parent = await mkdtemp(
+      join(tmpdir(), "swarm-world-independent-verification-"),
+    );
+    const checkout = join(parent, "checkout");
+    await run("git", [
+      "-C",
+      this.root,
+      "worktree",
+      "add",
+      "--detach",
+      checkout,
+      artifact.commit,
+    ]);
+    try {
+      for (const facility of facilities) {
+        this.verificationRunsUsed++;
+        const result = await this.executeFacility(facility, checkout);
+        const data = {
+          artifactId: artifact.id,
+          verifierAgentId: "environment-verifier",
+          facilityId: facility.id,
+          success: result.success,
+          outputDigest: result.outputDigest,
+          revision: artifact.commit,
+          facilityPolicyHash: this.facilityPolicyHash(),
+          recommendation: result.success
+            ? ("accept" as const)
+            : ("revise" as const),
+        };
+        const verification: RepositoryVerification = {
+          id: `verification_${sha256(data).slice(0, 24)}`,
+          ...data,
+        };
+        this.verifications.set(verification.id, verification);
+        this.trace.appendFacilityCompleted(
+          "environment-verifier",
+          verification.id,
+          {
+            facilityId: facility.id,
+            success: result.success,
+            exitCode: result.exitCode,
+            outputDigest: result.outputDigest,
+            output: result.output,
+          },
+        );
+        const node = this.node(
+          "verification",
+          verification.id,
+          `${facility.id}: ${verification.recommendation}`,
+        );
+        this.edge(artifact.id, node.id, "test_relation");
+        this.record(
+          "engine_verification",
+          result.success,
+          "environment-verifier",
+          verification.id,
+          {
+            artifactId: artifact.id,
+            facilityId: facility.id,
+            outputDigest: result.outputDigest,
+          },
+        );
+      }
+    } finally {
+      await run("git", [
+        "-C",
+        this.root,
+        "worktree",
+        "remove",
+        "--force",
+        checkout,
+      ]).catch(() => undefined);
+    }
+    if (this.artifactEligible(artifact)) artifact.status = "eligible";
+  }
+
+  private challengeVerification(
+    agent: RepositoryAgent,
+    action: Extract<RepositoryAction, { type: "CHALLENGE_VERIFICATION" }>,
+  ): EnvironmentResolution {
+    if (
+      !this.verifications.has(action.verificationId) ||
+      !this.owns(agent, action.evidenceIds)
+    )
+      return this.reject(
+        agent.id,
+        action.type,
+        "challenge requires verification and owned evidence",
+      );
+    const challenges =
+      this.verificationChallenges.get(action.verificationId) ?? [];
+    challenges.push(`${agent.id}: ${action.reason}`);
+    this.verificationChallenges.set(action.verificationId, challenges);
+    return this.accept(
+      agent.id,
+      action.type,
+      action.verificationId,
+      action.evidenceIds,
+    );
+  }
+
+  private recommendCandidate(
+    agent: RepositoryAgent,
+    artifactId: string,
+  ): EnvironmentResolution {
+    const artifact = this.artifacts.get(artifactId);
+    if (
+      !artifact ||
+      artifact.authorId === agent.id ||
+      !this.artifactEligible(artifact)
+    )
+      return this.reject(
+        agent.id,
+        "RECOMMEND_CANDIDATE",
+        "candidate is not independently recommendable",
+      );
+    const recommendations =
+      this.candidateRecommendations.get(artifactId) ?? new Set<string>();
+    recommendations.add(agent.id);
+    this.candidateRecommendations.set(artifactId, recommendations);
+    return this.accept(agent.id, "RECOMMEND_CANDIDATE", artifactId);
+  }
+
+  private artifactVerifications(artifactId: string): RepositoryVerification[] {
+    return [...this.verifications.values()].filter(
+      (verification) => verification.artifactId === artifactId,
+    );
+  }
+
+  private artifactEligible(artifact: RepositoryArtifact): boolean {
+    if (!this.config.goal) return true;
+    const mandatory = this.config.facilities
+      .filter(
+        (facility) => facility.mandatory && facility.category !== "hidden",
+      )
+      .map((facility) => facility.id);
+    const verifications = this.artifactVerifications(artifact.id).filter(
+      (verification) =>
+        verification.verifierAgentId !== artifact.authorId &&
+        verification.success &&
+        !this.verificationChallenges.get(verification.id)?.length,
+    );
+    return mandatory.every((id) =>
+      verifications.some((verification) => verification.facilityId === id),
+    );
+  }
+
+  private artifactVerificationComplete(artifact: RepositoryArtifact): boolean {
+    const mandatory = this.config.facilities
+      .filter(
+        (facility) => facility.mandatory && facility.category !== "hidden",
+      )
+      .map((facility) => facility.id);
+    const verifications = this.artifactVerifications(artifact.id).filter(
+      (verification) => verification.verifierAgentId !== artifact.authorId,
+    );
+    return mandatory.every((id) =>
+      verifications.some((verification) => verification.facilityId === id),
+    );
+  }
+
+  private selectCandidate(
+    candidates: RepositoryArtifact[],
+  ): RepositoryArtifact {
+    const scored = candidates.map((artifact) => ({
+      artifact,
+      passedFacilities: new Set(
+        this.artifactVerifications(artifact.id)
+          .filter((verification) => verification.success)
+          .map((verification) => verification.facilityId),
+      ).size,
+      recommendations:
+        this.candidateRecommendations.get(artifact.id)?.size ?? 0,
+      taskCoverage: artifact.taskIds.length,
+      changedLines: artifact.changedLines ?? Number.MAX_SAFE_INTEGER,
+    }));
+    scored.sort(
+      (a, b) =>
+        b.passedFacilities - a.passedFacilities ||
+        b.recommendations - a.recommendations ||
+        b.taskCoverage - a.taskCoverage ||
+        a.changedLines - b.changedLines ||
+        a.artifact.id.localeCompare(b.artifact.id),
+    );
+    const winner = scored[0]!;
+    const data = {
+      selectedArtifactId: winner.artifact.id,
+      eligibleArtifactIds: scored.map(({ artifact }) => artifact.id),
+      rejected: scored.slice(1).map(({ artifact }) => ({
+        artifactId: artifact.id,
+        reason: "lower deterministic evidence score",
+      })),
+      score: {
+        passedFacilities: winner.passedFacilities,
+        taskCoverage: winner.taskCoverage,
+        changedLines: winner.changedLines,
+      },
+    };
+    this.selection = { id: `selection_${sha256(data).slice(0, 24)}`, ...data };
+    this.record("candidate_selected", true, undefined, winner.artifact.id, {
+      ...this.selection,
+    });
+    return winner.artifact;
+  }
+
+  private taskNodeId(): string {
+    return this.nodeIdForStableKey("task", this.config.task.id);
+  }
+
+  private taskNodeFor(taskId: string): string {
+    return taskId === this.config.task.id
+      ? this.taskNodeId()
+      : this.nodeIdForStableKey("task_proposal", taskId);
+  }
+
+  private nodeIdForStableKey(
+    type: RepositoryNodeType,
+    stableKey: string,
+  ): string {
+    return `${type}_${sha256({ type, stableKey }).slice(0, 20)}`;
   }
 
   private async executeFacility(
@@ -1448,7 +2422,21 @@ export class RepositoryEnvironment implements Environment<
       "FOCUS",
       "INSPECT",
       "SEARCH",
-      ...(caps.taskClaims ? (["CLAIM_TASK"] as const) : []),
+      ...(caps.taskClaims || this.config.condition === "independent"
+        ? (["CLAIM_TASK"] as const)
+        : []),
+      ...(caps.taskClaims || this.config.condition === "independent"
+        ? ([
+            "PROPOSE_PROBLEM",
+            "CONFIRM_PROBLEM",
+            "CHALLENGE_PROBLEM",
+            "PROPOSE_TASK",
+            "DECOMPOSE_TASK",
+            "CLAIM_COMMITMENT",
+            "JOIN_COMMITMENT",
+            "RELEASE_COMMITMENT",
+          ] as const)
+        : []),
       ...(caps.communication ? (["COMMUNICATE"] as const) : []),
       ...(caps.teaching ? (["TEACH_ARTIFACT"] as const) : []),
       ...(caps.publication ? (["PUBLISH_FINDING"] as const) : []),
@@ -1462,6 +2450,10 @@ export class RepositoryEnvironment implements Environment<
           "EDIT_REPLACE",
           "RUN_CHECK",
           "CONSTRUCT_ARTIFACT",
+          "REQUEST_VERIFICATION",
+          "VERIFY_ARTIFACT",
+          "CHALLENGE_VERIFICATION",
+          "RECOMMEND_CANDIDATE",
           "REQUEST_INTEGRATION",
         ];
   }
