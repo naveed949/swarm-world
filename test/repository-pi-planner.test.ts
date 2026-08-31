@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { sha256 } from "../src/hash.js";
 import {
+  createSidecarRequest,
   createPiRepositoryPlanner,
   repositoryPlanJsonSchema,
   type RepositoryPlanRequest,
@@ -44,6 +45,11 @@ const config = {
   },
 } satisfies RepositoryRunConfig;
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+  delete process.env.SWARM_WORLD_PI_SIDECAR_TOKEN;
+});
+
 const observation: RepositoryObservation = {
   revision: "abc123",
   focusNodeId: "task",
@@ -79,6 +85,35 @@ const observation: RepositoryObservation = {
 };
 
 describe("Pi repository planner", () => {
+  it("authenticates every credential-backed sidecar request", async () => {
+    const token = "a".repeat(64);
+    process.env.SWARM_WORLD_PI_SIDECAR_TOKEN = token;
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ actions: [{ type: "WAIT" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    await createSidecarRequest("http://sidecar:4317")({
+      agentId: "agent_000000",
+      tick: 0,
+      role: "implementer",
+      context: {},
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      new URL("http://sidecar:4317/plan"),
+      expect.objectContaining({
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+        },
+      }),
+    );
+  });
+
   it("submits the real task and grounded evidence through one deep planner seam", async () => {
     let requestContext: unknown;
     const request: RepositoryPlanRequest = async (input) => {
@@ -161,7 +196,11 @@ describe("Pi repository planner", () => {
     };
 
     await expect(
-      planner.plan({ agentId: "agent_000000", tick: 3, observation: withRecipe }),
+      planner.plan({
+        agentId: "agent_000000",
+        tick: 3,
+        observation: withRecipe,
+      }),
     ).resolves.toEqual([{ type: "WAIT" }]);
     expect(phase).toEqual({
       name: "edit-recipe",
@@ -182,10 +221,12 @@ describe("Pi repository planner", () => {
       },
     });
     const variants = (
-      ((schema.properties as Record<string, unknown>).actions as Record<
-        string,
-        unknown
-      >).items as Record<string, unknown>
+      (
+        (schema.properties as Record<string, unknown>).actions as Record<
+          string,
+          unknown
+        >
+      ).items as Record<string, unknown>
     ).oneOf as Array<Record<string, unknown>>;
     const actionTypes = variants.map((variant) => {
       const fields = variant.properties as Record<string, unknown>;
@@ -202,9 +243,9 @@ describe("Pi repository planner", () => {
       (edit.properties as Record<string, unknown>).expectedContentHash,
     ).toEqual({ type: "string", const: "current-hash" });
     const runCheck = variants.at(-1)!;
-    expect(
-      (runCheck.properties as Record<string, unknown>).facilityId,
-    ).toEqual({ type: "string", enum: ["focused"] });
+    expect((runCheck.properties as Record<string, unknown>).facilityId).toEqual(
+      { type: "string", enum: ["focused"] },
+    );
   });
 
   it("forces repair instead of repeating a failed check", async () => {

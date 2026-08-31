@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { EnvironmentPlanner } from "./environment-simulator.js";
 import { sha256 } from "./hash.js";
 import type { RepositoryRunConfig } from "./run-config.js";
+import { sidecarAuthorization } from "./pi-sidecar-auth.js";
 import type {
   RepositoryAction,
   RepositoryObservation,
@@ -301,16 +302,21 @@ export function createPiModelRequest(
   };
 }
 
-function createSidecarRequest(endpoint: string): RepositoryPlanRequest {
+export function createSidecarRequest(endpoint: string): RepositoryPlanRequest {
+  const authorization = sidecarAuthorization(
+    process.env.SWARM_WORLD_PI_SIDECAR_TOKEN ?? "",
+  );
   return async (input) => {
     const response = await fetch(new URL("/plan", endpoint), {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", authorization },
       body: JSON.stringify(input),
       signal: AbortSignal.timeout(300_000),
     });
     if (!response.ok)
-      throw new Error(`Pi sidecar request failed with status ${response.status}`);
+      throw new Error(
+        `Pi sidecar request failed with status ${response.status}`,
+      );
     return response.json();
   };
 }
