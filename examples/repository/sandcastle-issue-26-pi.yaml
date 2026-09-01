@@ -4,6 +4,7 @@ ticks: 50
 macroturnInterval: 1
 planLimit: 1
 condition: full
+coordinationModel: emergent-society
 planner: pi
 model:
   provider: openai-codex
@@ -16,6 +17,27 @@ environment:
   root: ../../workspace/target
   baseCommit: f36d8413aec7f4b167114a55ee9b516d1c1d6c4d
   readOnly: false
+  goal:
+    id: deliver-sandcastle-issue-26
+    statement: >-
+      Produce the strongest independently verified implementation of issue 26
+      without changing repository policy or publishing externally.
+    success:
+      requiredTaskIds:
+        - sandcastle-issue-26
+      minimumEligibleArtifacts: 1
+      mandatoryChecksPass: true
+    budget:
+      maxAgents: 5
+      maxActions: 128
+      maxVerificationRuns: 16
+      maxWrites: 900
+      maxAttempts: 4
+      maxModelCalls: 100
+    stop:
+      successSustainedForCheckpoints: 1
+      noProgressTicks: 20
+      checkpointInterval: 5
   task:
     id: sandcastle-issue-26
     title: Publish one approved task as a draft pull request

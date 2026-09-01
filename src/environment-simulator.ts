@@ -2,6 +2,8 @@ import type { Environment, EnvironmentResolution } from "./environment.js";
 import { sha256 } from "./hash.js";
 
 export interface EnvironmentPlanner<Observation, Action> {
+  /** True only when each plan call consumes one configured model invocation. */
+  modelBacked?: boolean;
   plan(input: {
     agentId: string;
     tick: number;
@@ -12,6 +14,7 @@ export interface EnvironmentPlanner<Observation, Action> {
 export interface EnvironmentSimulatorConfig {
   macroturnInterval: number;
   planLimit: number;
+  maxModelCalls?: number;
 }
 
 export interface EnvironmentSimulatorEvent<Action> {
@@ -26,6 +29,7 @@ export interface EnvironmentSimulatorEvent<Action> {
 /** Domain-neutral scheduling core. All consequences remain environment-owned. */
 export class EnvironmentSimulator<Observation, Action, Frozen, Evaluation> {
   tick = 0;
+  modelCalls = 0;
   readonly events: Array<EnvironmentSimulatorEvent<Action>> = [];
   private readonly queues = new Map<string, Action[]>();
   private readonly orderedAgentIds: string[];
@@ -45,12 +49,20 @@ export class EnvironmentSimulator<Observation, Action, Frozen, Evaluation> {
 
   async step(): Promise<void> {
     if (this.planner) {
-      const due = this.orderedAgentIds.filter(
+      const scheduled = this.orderedAgentIds.filter(
         (_, index) =>
           (this.tick - (index % this.config.macroturnInterval)) %
             this.config.macroturnInterval ===
           0,
       );
+      const remainingModelCalls = this.planner.modelBacked
+        ? Math.max(
+            0,
+            (this.config.maxModelCalls ?? Number.POSITIVE_INFINITY) -
+              this.modelCalls,
+          )
+        : Number.POSITIVE_INFINITY;
+      const due = scheduled.slice(0, remainingModelCalls);
       const proposals = await Promise.all(
         due.map(async (agentId) => ({
           agentId,
@@ -61,6 +73,7 @@ export class EnvironmentSimulator<Observation, Action, Frozen, Evaluation> {
           }),
         })),
       );
+      if (this.planner.modelBacked) this.modelCalls += due.length;
       for (const proposal of proposals)
         this.queues.set(
           proposal.agentId,

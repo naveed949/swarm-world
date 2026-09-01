@@ -2,6 +2,10 @@ import type { Condition } from "./types.js";
 
 export type RepositoryNodeType =
   | "task"
+  | "problem"
+  | "task_proposal"
+  | "commitment"
+  | "verification"
   | "file"
   | "symbol"
   | "module"
@@ -45,6 +49,116 @@ export interface RepositoryTask {
   priority: number;
 }
 
+export interface RepositoryGoal {
+  id: string;
+  statement: string;
+  success: {
+    requiredTaskIds?: string[] | undefined;
+    minimumEligibleArtifacts?: number | undefined;
+    mandatoryChecksPass?: boolean | undefined;
+  };
+  budget: {
+    maxAgents?: number | undefined;
+    maxActions: number;
+    maxVerificationRuns: number;
+    maxWrites: number;
+    maxAttempts: number;
+    maxModelCalls?: number | undefined;
+  };
+  stop: {
+    successSustainedForCheckpoints: number;
+    noProgressTicks: number;
+    checkpointInterval: number;
+  };
+}
+
+export interface RepositoryProblem {
+  id: string;
+  goalId: string;
+  authorAgentId: string;
+  statement: string;
+  evidenceIds: string[];
+  goalImpact: string;
+  status: "proposed" | "confirmed" | "challenged" | "resolved";
+  confirmations: string[];
+  challenges: Array<{ agentId: string; evidenceIds: string[]; reason: string }>;
+}
+
+export interface RepositoryTaskProposal extends RepositoryTask {
+  goalId: string;
+  problemId: string;
+  authorAgentId: string;
+  objective: string;
+  expectedOutcome: string;
+  dependencies: string[];
+  verificationPlan: string[];
+  estimatedCost: number;
+  status: "proposed" | "admitted" | "rejected" | "resolved";
+}
+
+export interface RepositoryCommitment {
+  id: string;
+  agentId: string;
+  taskId: string;
+  approach: string;
+  roleLabel: string;
+  intendedContribution: string;
+  exitCondition: string;
+  createdAtTick: number;
+  leaseExpiresAtTick: number;
+  status: "active" | "released" | "expired" | "completed";
+}
+
+export interface RepositoryVerification {
+  id: string;
+  artifactId: string;
+  verifierAgentId: string;
+  facilityId: string;
+  success: boolean;
+  outputDigest: string;
+  revision: string;
+  facilityPolicyHash: string;
+  recommendation: "accept" | "revise" | "reject";
+}
+
+export interface RepositoryAttempt {
+  id: string;
+  commitmentId: string;
+  agentId: string;
+  taskId: string;
+  approach: string;
+  createdAtTick: number;
+  status: "active" | "submitted" | "abandoned" | "expired";
+  artifactId?: string;
+}
+
+export interface RepositorySocietyRecord {
+  sequence: number;
+  tick: number;
+  entityType:
+    | "problem"
+    | "task"
+    | "commitment"
+    | "attempt"
+    | "verification"
+    | "selection";
+  entityId: string;
+  eventType: string;
+  snapshot: unknown;
+}
+
+export interface RepositorySelection {
+  id: string;
+  selectedArtifactId: string;
+  eligibleArtifactIds: string[];
+  rejected: Array<{ artifactId: string; reason: string }>;
+  score: {
+    passedFacilities: number;
+    taskCoverage: number;
+    changedLines: number;
+  };
+}
+
 export interface RepositoryFacility {
   id: string;
   category:
@@ -68,6 +182,7 @@ export interface RepositoryEnvironmentConfig {
   readOnly?: boolean;
   condition?: Condition;
   task: RepositoryTask;
+  goal?: RepositoryGoal;
   observationRadius: number;
   observationLimit: number;
   allowedPaths: string[];
@@ -82,6 +197,58 @@ export type RepositoryAction =
   | { type: "INSPECT"; nodeId: string }
   | { type: "SEARCH"; query: string; paths?: string[] }
   | { type: "CLAIM_TASK"; taskId: string }
+  | {
+      type: "PROPOSE_PROBLEM";
+      goalId: string;
+      statement: string;
+      evidenceIds: string[];
+      goalImpact: string;
+    }
+  | { type: "CONFIRM_PROBLEM"; problemId: string; evidenceIds: string[] }
+  | {
+      type: "CHALLENGE_PROBLEM";
+      problemId: string;
+      evidenceIds: string[];
+      reason: string;
+    }
+  | {
+      type: "PROPOSE_TASK";
+      goalId: string;
+      problemId: string;
+      objective: string;
+      expectedOutcome: string;
+      relevantPaths: string[];
+      acceptanceCriteria: string[];
+      acceptanceFacilityIds: string[];
+      regressionFacilityIds: string[];
+      dependencies: string[];
+      verificationPlan: string[];
+      estimatedCost: number;
+    }
+  | {
+      type: "DECOMPOSE_TASK";
+      taskId: string;
+      objective: string;
+      relevantPaths: string[];
+      verificationPlan: string[];
+      estimatedCost: number;
+    }
+  | {
+      type: "CLAIM_COMMITMENT";
+      taskId: string;
+      approach: string;
+      roleLabel: string;
+      intendedContribution: string;
+      exitCondition: string;
+      leaseTicks: number;
+    }
+  | {
+      type: "JOIN_COMMITMENT";
+      commitmentId: string;
+      roleLabel: string;
+      leaseTicks: number;
+    }
+  | { type: "RELEASE_COMMITMENT"; commitmentId: string }
   | { type: "COMMUNICATE"; recipientId: string; text: string }
   | { type: "TEACH_ARTIFACT"; recipientId: string; artifactId: string }
   | {
@@ -108,6 +275,15 @@ export type RepositoryAction =
     }
   | { type: "RUN_CHECK"; recipeId: string; facilityId: string }
   | { type: "CONSTRUCT_ARTIFACT"; recipeId: string }
+  | { type: "REQUEST_VERIFICATION"; artifactId: string }
+  | { type: "VERIFY_ARTIFACT"; artifactId: string; facilityId: string }
+  | {
+      type: "CHALLENGE_VERIFICATION";
+      verificationId: string;
+      evidenceIds: string[];
+      reason: string;
+    }
+  | { type: "RECOMMEND_CANDIDATE"; artifactId: string }
   | {
       type: "PUBLISH_FINDING";
       title: string;
@@ -140,6 +316,23 @@ export interface RepositoryObservation {
     failedFacilityIds: string[];
   }>;
   ownedArtifactIds: string[];
+  goal?: RepositoryGoal;
+  problems?: RepositoryProblem[];
+  taskProposals?: RepositoryTaskProposal[];
+  commitments?: RepositoryCommitment[];
+  candidates?: Array<{
+    artifactId: string;
+    authorId: string;
+    taskIds: string[];
+    patchHash: string;
+    verificationFacilityIds: string[];
+    verificationRequested: boolean;
+    eligible: boolean;
+  }>;
+  verifications?: RepositoryVerification[];
+  attempts?: RepositoryAttempt[];
+  societyRecords?: RepositorySocietyRecord[];
+  selection?: RepositorySelection;
   taskClaims: Array<{ taskId: string; agentId: string }>;
   messages: Array<{ senderId: string; recipientId: string; text: string }>;
   findings: Array<{
@@ -156,6 +349,10 @@ export interface RepositoryObservation {
     actions: number;
     verification: number;
     writes: number;
+    globalActions?: number;
+    globalVerification?: number;
+    globalWrites?: number;
+    attempts?: number;
   };
 }
 
@@ -171,6 +368,10 @@ export interface RepositoryArtifact {
   patchHash: string;
   evidenceIds: string[];
   priority: number;
+  approach?: string;
+  hypothesis?: string;
+  changedLines?: number;
+  status?: "submitted" | "eligible" | "rejected" | "accepted" | "superseded";
 }
 
 export interface RepositoryFrozenSnapshot {
@@ -180,7 +381,15 @@ export interface RepositoryFrozenSnapshot {
   facilityPolicyHash: string;
   traceHash: string;
   acceptedArtifacts: RepositoryArtifact[];
+  facilities: RepositoryFacility[];
   task: RepositoryTask;
+  goal?: RepositoryGoal;
+  selection?: RepositorySelection;
+  problems: RepositoryProblem[];
+  taskProposals: RepositoryTaskProposal[];
+  nodePaths: Record<string, string>;
+  attempts: RepositoryAttempt[];
+  societyRecords: RepositorySocietyRecord[];
 }
 
 export interface RepositoryEvaluation {
@@ -233,6 +442,7 @@ export interface RepositoryRecipe {
   id: string;
   ownerId: string;
   taskId: string;
+  attemptId?: string;
   evidenceIds: string[];
   targets: string[];
   requiredFacilities: string[];

@@ -8,6 +8,7 @@ import {
   RepositoryEnvironment,
   type RepositoryAction,
   type RepositoryEvaluation,
+  type RepositoryGoal,
   type RepositoryObservation,
 } from "./repository-environment.js";
 import type { RepositoryRunConfig } from "./run-config.js";
@@ -21,6 +22,15 @@ export interface RepositoryRunResult {
     traceHash: string;
     environmentTraceHash: string;
     evaluation: RepositoryEvaluation;
+    coordinationModel?: RepositoryRunConfig["coordinationModel"];
+    stopReason?:
+      "tick-budget" | "goal-satisfied" | "no-progress" | "model-budget";
+    checkpoints?: Array<{
+      tick: number;
+      candidateCommit: string;
+      outcome: RepositoryEvaluation["outcome"];
+      goalSatisfied: boolean;
+    }>;
     memberCandidateCommits?: string[];
     memberTraceHashes?: string[];
   };
@@ -28,6 +38,34 @@ export interface RepositoryRunResult {
   summaryPath: string;
   patchPath: string;
   mailboxPath: string;
+}
+
+export interface RepositoryCoordinationComparison {
+  baseCommit: string;
+  goalId?: string;
+  results: Array<{
+    coordinationModel: NonNullable<RepositoryRunConfig["coordinationModel"]>;
+    outcome: RepositoryEvaluation["outcome"];
+    hardGatesPassed: boolean;
+    correctness: number;
+    regressionSafety: number;
+    issueCoverage: number;
+    maintainability: number;
+    robustness: number;
+    traceHash: string;
+    stopReason?: RepositoryRunResult["summary"]["stopReason"];
+  }>;
+}
+
+export function checkpointSatisfiesGoal(
+  goal: RepositoryGoal,
+  progress: ReturnType<RepositoryEnvironment["progress"]>,
+  evaluation: RepositoryEvaluation,
+): boolean {
+  return (
+    progress.goalSatisfied &&
+    (goal.success.mandatoryChecksPass !== true || evaluation.hardGatesPassed)
+  );
 }
 
 const waitPlanner: EnvironmentPlanner<RepositoryObservation, RepositoryAction> =
@@ -148,13 +186,23 @@ export async function runRepositoryExperiment(
     RepositoryAction
   > = createRepositoryPlanner(config),
 ): Promise<RepositoryRunResult> {
+  validateSocietyPopulation(config);
   const ids = Array.from(
     { length: config.population },
     (_, index) => `agent_${String(index).padStart(6, "0")}`,
   );
   const members =
-    config.condition === "independent"
-      ? await Promise.all(ids.map((id) => runMember(config, [id], planner)))
+    config.condition === "independent" ||
+    config.coordinationModel === "independent-search"
+      ? await Promise.all(
+          ids.map((id, index) =>
+            runMember(
+              independentMemberConfig(config, index, ids.length),
+              [id],
+              planner,
+            ),
+          ),
+        )
       : [await runMember(config, ids, planner)];
   const evaluation = envelope(members.map((member) => member.evaluation));
   const winningMember =
@@ -188,6 +236,15 @@ export async function runRepositoryExperiment(
       members.map((member) => member.frozen.traceHash),
     ),
     evaluation,
+    ...(config.coordinationModel
+      ? { coordinationModel: config.coordinationModel }
+      : {}),
+    ...(winningMember.stopReason
+      ? { stopReason: winningMember.stopReason }
+      : {}),
+    ...(winningMember.checkpoints.length
+      ? { checkpoints: winningMember.checkpoints }
+      : {}),
     ...(members.length > 1
       ? {
           memberCandidateCommits: members.map(
@@ -238,12 +295,119 @@ export async function runRepositoryExperiment(
   return { summary, tracePath, summaryPath, patchPath, mailboxPath };
 }
 
+function validateSocietyPopulation(config: RepositoryRunConfig): void {
+  const goal = config.environment.goal;
+  if (!goal) return;
+  const maxAgents = goal.budget.maxAgents ?? 5;
+  if (config.population > maxAgents)
+    throw new Error("Repository population exceeds the goal maxAgents budget");
+  const model =
+    config.coordinationModel ??
+    (config.condition === "independent"
+      ? "independent-search"
+      : "emergent-society");
+  if (model !== "independent-search" && config.population < 3)
+    throw new Error("Repository societies require three to five agents");
+}
+
+function partitionBudget(
+  total: number,
+  index: number,
+  members: number,
+): number {
+  return Math.floor(total / members) + (index < total % members ? 1 : 0);
+}
+
+function independentMemberConfig(
+  config: RepositoryRunConfig,
+  index: number,
+  members: number,
+): RepositoryRunConfig {
+  const member = structuredClone(config);
+  const goal = member.environment.goal;
+  if (!goal) return member;
+  const source = config.environment.goal!.budget;
+  goal.budget = {
+    ...goal.budget,
+    maxActions: partitionBudget(source.maxActions, index, members),
+    maxVerificationRuns: partitionBudget(
+      source.maxVerificationRuns,
+      index,
+      members,
+    ),
+    maxWrites: partitionBudget(source.maxWrites, index, members),
+    maxAttempts: partitionBudget(source.maxAttempts, index, members),
+    ...(source.maxModelCalls !== undefined
+      ? {
+          maxModelCalls: partitionBudget(source.maxModelCalls, index, members),
+        }
+      : {}),
+  };
+  return member;
+}
+
+export async function runRepositoryCoordinationComparison(
+  baseConfig: RepositoryRunConfig,
+  outputDir = "runs",
+  models: Array<NonNullable<RepositoryRunConfig["coordinationModel"]>> = [
+    "emergent-society",
+    "fixed-workflow",
+    "central-supervisor",
+    "independent-search",
+  ],
+  plannerFactory: (
+    config: RepositoryRunConfig,
+  ) => EnvironmentPlanner<
+    RepositoryObservation,
+    RepositoryAction
+  > = createRepositoryPlanner,
+): Promise<RepositoryCoordinationComparison> {
+  const results: RepositoryCoordinationComparison["results"] = [];
+  for (const coordinationModel of models) {
+    const config: RepositoryRunConfig = {
+      ...structuredClone(baseConfig),
+      coordinationModel,
+    };
+    const result = await runRepositoryExperiment(
+      config,
+      outputDir,
+      plannerFactory(config),
+    );
+    results.push({
+      coordinationModel,
+      outcome: result.summary.outcome,
+      hardGatesPassed: result.summary.evaluation.hardGatesPassed,
+      correctness: result.summary.evaluation.correctness,
+      regressionSafety: result.summary.evaluation.regressionSafety,
+      issueCoverage: result.summary.evaluation.issueCoverage,
+      maintainability: result.summary.evaluation.maintainability,
+      robustness: result.summary.evaluation.robustness,
+      traceHash: result.summary.traceHash,
+      ...(result.summary.stopReason
+        ? { stopReason: result.summary.stopReason }
+        : {}),
+    });
+  }
+  return {
+    baseCommit: baseConfig.environment.baseCommit,
+    ...(baseConfig.environment.goal
+      ? { goalId: baseConfig.environment.goal.id }
+      : {}),
+    results,
+  };
+}
+
 async function runMember(
   config: RepositoryRunConfig,
   agentIds: string[],
   planner: EnvironmentPlanner<RepositoryObservation, RepositoryAction>,
 ) {
-  const environment = await RepositoryEnvironment.create(config.environment);
+  const environment = await RepositoryEnvironment.create({
+    ...config.environment,
+    ...(config.coordinationModel === "independent-search"
+      ? { condition: "independent" as const }
+      : {}),
+  });
   for (const id of agentIds) environment.createAgent(id);
   const simulator = new EnvironmentSimulator(
     environment,
@@ -251,16 +415,73 @@ async function runMember(
     {
       macroturnInterval: config.macroturnInterval,
       planLimit: config.planLimit,
+      ...(config.environment.goal?.budget.maxModelCalls !== undefined
+        ? { maxModelCalls: config.environment.goal.budget.maxModelCalls }
+        : {}),
     },
     planner,
   );
-  while (simulator.tick < config.ticks) await simulator.step();
+  const goal = config.environment.goal;
+  const checkpoints: Array<{
+    tick: number;
+    candidateCommit: string;
+    outcome: RepositoryEvaluation["outcome"];
+    goalSatisfied: boolean;
+  }> = [];
+  let lastFingerprint = environment.progress().fingerprint;
+  let stagnantTicks = 0;
+  let sustainedSuccess = 0;
+  let stopReason:
+    "tick-budget" | "goal-satisfied" | "no-progress" | "model-budget" =
+    "tick-budget";
+  while (simulator.tick < config.ticks) {
+    if (
+      goal?.budget.maxModelCalls !== undefined &&
+      simulator.modelCalls >= goal.budget.maxModelCalls
+    ) {
+      stopReason = "model-budget";
+      break;
+    }
+    await simulator.step();
+    const progress = environment.progress();
+    if (progress.fingerprint === lastFingerprint) stagnantTicks++;
+    else {
+      stagnantTicks = 0;
+      lastFingerprint = progress.fingerprint;
+    }
+    if (goal && simulator.tick % goal.stop.checkpointInterval === 0) {
+      const checkpoint = await simulator.freeze();
+      const checkpointEvaluation = await simulator.evaluate(checkpoint);
+      const goalSatisfied = checkpointSatisfiesGoal(
+        goal,
+        progress,
+        checkpointEvaluation,
+      );
+      checkpoints.push({
+        tick: simulator.tick,
+        candidateCommit: checkpoint.candidateCommit,
+        outcome: checkpointEvaluation.outcome,
+        goalSatisfied,
+      });
+      sustainedSuccess = goalSatisfied ? sustainedSuccess + 1 : 0;
+      if (sustainedSuccess >= goal.stop.successSustainedForCheckpoints) {
+        stopReason = "goal-satisfied";
+        break;
+      }
+    }
+    if (goal && stagnantTicks >= goal.stop.noProgressTicks) {
+      stopReason = "no-progress";
+      break;
+    }
+  }
   const frozen = await simulator.freeze();
   return {
     environment,
     simulator,
     frozen,
     evaluation: await simulator.evaluate(frozen),
+    stopReason,
+    checkpoints,
   };
 }
 
