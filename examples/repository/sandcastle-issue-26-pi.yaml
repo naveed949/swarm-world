@@ -28,6 +28,7 @@ environment:
       minimumEligibleArtifacts: 1
       mandatoryChecksPass: true
     budget:
+      maxAgents: 5
       maxActions: 128
       maxVerificationRuns: 16
       maxWrites: 900

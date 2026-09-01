@@ -131,9 +131,12 @@ The public repository lifecycle is:
 
 Repository configurations may include an immutable `goal` contract containing
 measurable success, action/write/attempt/verification/model budgets, checkpoint
-frequency, sustained-success requirements, and a no-progress limit. When a goal
-is present, agents are not assigned permanent implementer or collaborator
-identities. They can instead:
+frequency, sustained-success requirements, a no-progress limit, and a maximum
+population of five agents. Non-isolated societies require three to five agents.
+Every proposed problem and task is bound to the operator's goal; task admission
+cannot widen the operator-owned paths, facilities, or budget. When a goal is
+present, agents are not assigned permanent implementer or collaborator identities.
+They can instead:
 
 1. Publish an evidence-owned problem and have another agent confirm or
    challenge it.
@@ -158,7 +161,19 @@ identities. They can instead:
 Role labels never grant authority. All permissions continue to derive from the
 environment, treatment, path policy, evidence ownership, commitment state, and
 authorship separation. Hidden facilities remain unavailable during discovery
-and run only in agent-free checkpoint/final evaluation.
+and run only in agent-free checkpoint/final evaluation. Disabled treatment
+actions are removed from each model request's action schema. Problems, tasks,
+commitments, attempts, verifications, and selections are recorded in an
+append-only society ledger. Frozen checkpoints contain the immutable task,
+proposal, path, attempt, and governance state needed for later evaluation, while
+operator-authored mandatory facilities remain the sole scoring gates.
+
+`maxAttempts` counts implementation attempts begun at formulation, rather than
+task claims or team membership. `maxModelCalls` counts only model-backed planner
+invocations and is enforced before scheduling a call. Isolated
+`independent-search` members partition one shared experiment budget, so increasing
+the population does not multiply actions, writes, attempts, verifications, or
+model calls.
 
 Without a `goal`, repository configurations retain the original single-task
 legacy lifecycle for compatibility with retained examples.

@@ -57,4 +57,44 @@ describe("Environment lifecycle contract", () => {
     expect(simulator.events[0]!.resolution.accepted).toBe(true);
     expect(simulator.traceHash()).toMatch(/^[a-f0-9]{64}$/);
   });
+
+  it("counts only model-backed planner calls and never exceeds their cap", async () => {
+    const config = parseConfig({
+      seed: 15,
+      population: 3,
+      ticks: 1,
+      cognition: "heuristic",
+      world: { width: 24, height: 18 },
+      evaluation: { checkpoints: [1], ticks: 1, seeds: [93] },
+    });
+    const environment = new BioFoundryEnvironment(config);
+    const agentIds = environment.simulator.agents.map((agent) => agent.id);
+    let calls = 0;
+    const simulator = new EnvironmentSimulator(
+      environment,
+      agentIds,
+      { macroturnInterval: 1, planLimit: 1, maxModelCalls: 1 },
+      {
+        modelBacked: true,
+        plan: async () => {
+          calls++;
+          return [{ type: "WAIT" as const }];
+        },
+      },
+    );
+
+    await simulator.step();
+
+    expect(calls).toBe(1);
+    expect(simulator.modelCalls).toBe(1);
+
+    const deterministic = new EnvironmentSimulator(
+      new BioFoundryEnvironment(config),
+      agentIds,
+      { macroturnInterval: 1, planLimit: 1, maxModelCalls: 1 },
+      { plan: async () => [{ type: "WAIT" as const }] },
+    );
+    await deterministic.step();
+    expect(deterministic.modelCalls).toBe(0);
+  });
 });

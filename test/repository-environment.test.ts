@@ -9,6 +9,7 @@ import {
   type RepositoryEnvironmentConfig,
 } from "../src/repository-environment.js";
 import {
+  checkpointSatisfiesGoal,
   createRepositoryPlanner,
   runRepositoryCoordinationComparison,
   runRepositoryExperiment,
@@ -127,6 +128,22 @@ describe("RepositoryEnvironment", () => {
     expect(first.nodes.map((node) => node.path)).not.toContain(".env");
     expect(first.edges.some((edge) => edge.type === "test_relation")).toBe(
       true,
+    );
+  });
+
+  it("returns an immutable self-contained repository checkpoint", async () => {
+    const environment = await RepositoryEnvironment.create(fixture());
+    environment.createAgent("agent-1");
+
+    const frozen = await environment.freeze();
+
+    expect(Object.isFrozen(frozen)).toBe(true);
+    expect(Object.isFrozen(frozen.task)).toBe(true);
+    expect(Object.isFrozen(frozen.facilities)).toBe(true);
+    expect(Object.isFrozen(frozen.facilities[0])).toBe(true);
+    expect(Object.isFrozen(frozen.taskProposals)).toBe(true);
+    expect(Object.values(frozen.nodePaths)).toEqual(
+      expect.arrayContaining(["math.ts", "math.test.ts"]),
     );
   });
 
@@ -545,6 +562,50 @@ describe("RepositoryEnvironment", () => {
     expect(result.summary.memberTraceHashes).toHaveLength(2);
   });
 
+  it("shares one global budget across independent-search members", async () => {
+    const environment = fixture();
+    environment.goal = {
+      id: "matched-independent-budget",
+      statement: "Compare three independent attempts fairly",
+      success: { minimumEligibleArtifacts: 1 },
+      budget: {
+        maxActions: 3,
+        maxVerificationRuns: 3,
+        maxWrites: 21,
+        maxAttempts: 3,
+        maxModelCalls: 3,
+      },
+      stop: {
+        successSustainedForCheckpoints: 1,
+        noProgressTicks: 10,
+        checkpointInterval: 5,
+      },
+    };
+    const directory = mkdtempSync(join(tmpdir(), "swarm-world-budget-"));
+    const result = await runRepositoryExperiment(
+      {
+        seed: 190,
+        population: 3,
+        ticks: 2,
+        macroturnInterval: 1,
+        planLimit: 1,
+        condition: "independent",
+        coordinationModel: "independent-search",
+        environment: { ...environment, condition: "independent" },
+      },
+      directory,
+      { modelBacked: true, plan: async () => [{ type: "WAIT" }] },
+    );
+    const records = readFileSync(result.tracePath, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+
+    expect(
+      records.filter((record) => record.recordType === "scheduler"),
+    ).toHaveLength(3);
+  });
+
   it("freezes periodic checkpoints and stops a stalled repository society", async () => {
     const environment = fixture();
     environment.goal = {
@@ -567,7 +628,7 @@ describe("RepositoryEnvironment", () => {
     const result = await runRepositoryExperiment(
       {
         seed: 20,
-        population: 1,
+        population: 3,
         ticks: 10,
         macroturnInterval: 1,
         planLimit: 1,
@@ -585,6 +646,49 @@ describe("RepositoryEnvironment", () => {
         (checkpoint) => !checkpoint.goalSatisfied,
       ),
     ).toBe(true);
+  });
+
+  it("never treats a failed mandatory checkpoint as goal success", () => {
+    const config = fixture().task;
+    expect(
+      checkpointSatisfiesGoal(
+        {
+          id: "verified-goal",
+          statement: "Pass all mandatory checks",
+          success: { mandatoryChecksPass: true, minimumEligibleArtifacts: 1 },
+          budget: {
+            maxActions: 10,
+            maxVerificationRuns: 4,
+            maxWrites: 20,
+            maxAttempts: 2,
+          },
+          stop: {
+            successSustainedForCheckpoints: 1,
+            noProgressTicks: 4,
+            checkpointInterval: 1,
+          },
+        },
+        {
+          tick: 3,
+          fingerprint: "integrated",
+          eligibleArtifacts: 1,
+          integratedArtifacts: 1,
+          goalSatisfied: true,
+        },
+        {
+          outcome: "evaluation inconclusive",
+          revision: "candidate",
+          hardGatesPassed: false,
+          checks: [],
+          correctness: 1,
+          regressionSafety: 1,
+          issueCoverage: 1,
+          maintainability: 1,
+          robustness: 0,
+        },
+      ),
+    ).toBe(false);
+    expect(config.acceptanceFacilityIds).toEqual(["acceptance"]);
   });
 
   it("compares all repository coordination models on the same pinned world", async () => {
@@ -608,7 +712,7 @@ describe("RepositoryEnvironment", () => {
     };
     const config = {
       seed: 21,
-      population: 1,
+      population: 3,
       ticks: 2,
       macroturnInterval: 1,
       planLimit: 1,
@@ -641,6 +745,261 @@ describe("RepositoryEnvironment", () => {
         ({ stopReason }) => stopReason === "no-progress",
       ),
     ).toBe(true);
+  });
+
+  it("enforces the bounded three-to-five-agent society contract", async () => {
+    const environment = fixture();
+    environment.goal = {
+      id: "bounded-society",
+      statement: "Use a bounded repository society",
+      success: { minimumEligibleArtifacts: 1 },
+      budget: {
+        maxAgents: 5,
+        maxActions: 10,
+        maxVerificationRuns: 5,
+        maxWrites: 20,
+        maxAttempts: 3,
+      },
+      stop: {
+        successSustainedForCheckpoints: 1,
+        noProgressTicks: 2,
+        checkpointInterval: 1,
+      },
+    };
+
+    await expect(
+      runRepositoryExperiment({
+        seed: 211,
+        population: 6,
+        ticks: 1,
+        macroturnInterval: 1,
+        planLimit: 1,
+        condition: "full",
+        coordinationModel: "emergent-society",
+        environment,
+      }),
+    ).rejects.toThrow("population");
+    await expect(
+      runRepositoryExperiment({
+        seed: 212,
+        population: 2,
+        ticks: 1,
+        macroturnInterval: 1,
+        planLimit: 1,
+        condition: "full",
+        coordinationModel: "emergent-society",
+        environment,
+      }),
+    ).rejects.toThrow("three to five agents");
+  });
+
+  it("keeps the goal immutable and admits only goal-bound operator-scoped tasks", async () => {
+    const config = fixture();
+    config.goal = {
+      id: "repair-math",
+      statement: "Repair the configured addition contract",
+      success: { minimumEligibleArtifacts: 1 },
+      budget: {
+        maxAgents: 3,
+        maxActions: 20,
+        maxVerificationRuns: 4,
+        maxWrites: 5,
+        maxAttempts: 2,
+      },
+      stop: {
+        successSustainedForCheckpoints: 1,
+        noProgressTicks: 5,
+        checkpointInterval: 1,
+      },
+    };
+    const environment = await RepositoryEnvironment.create(config);
+    config.goal.statement = "Mutated after environment creation";
+    for (const id of ["author", "reviewer"]) environment.createAgent(id);
+    const observed = await environment.observe({ agentId: "author" });
+    expect(observed.goal?.statement).toBe(
+      "Repair the configured addition contract",
+    );
+    const math = observed.nodes.find((node) => node.path === "math.ts")!;
+    const authorEvidence = (
+      await environment.resolve({
+        agentId: "author",
+        action: { type: "INSPECT", nodeId: math.id },
+      })
+    ).evidenceIds;
+    const reviewerEvidence = (
+      await environment.resolve({
+        agentId: "reviewer",
+        action: { type: "INSPECT", nodeId: math.id },
+      })
+    ).evidenceIds;
+
+    await expect(
+      environment.resolve({
+        agentId: "author",
+        action: {
+          type: "PROPOSE_PROBLEM",
+          goalId: "another-goal",
+          statement: "Unrelated work",
+          evidenceIds: authorEvidence,
+          goalImpact: "Claims relevance",
+        },
+      }),
+    ).resolves.toMatchObject({
+      accepted: false,
+      reason: "problem is off-goal",
+    });
+    const problem = await environment.resolve({
+      agentId: "author",
+      action: {
+        type: "PROPOSE_PROBLEM",
+        goalId: "repair-math",
+        statement: "Addition violates its configured acceptance check",
+        evidenceIds: authorEvidence,
+        goalImpact: "The configured addition contract fails",
+      },
+    });
+    await environment.resolve({
+      agentId: "reviewer",
+      action: {
+        type: "CONFIRM_PROBLEM",
+        problemId: problem.targetId!,
+        evidenceIds: reviewerEvidence,
+      },
+    });
+
+    await expect(
+      environment.resolve({
+        agentId: "author",
+        action: {
+          type: "PROPOSE_TASK",
+          goalId: "repair-math",
+          problemId: problem.targetId!,
+          objective: "Edit unrelated notes",
+          expectedOutcome: "Notes change",
+          relevantPaths: ["notes.ts"],
+          acceptanceCriteria: ["Anything passes"],
+          acceptanceFacilityIds: ["acceptance"],
+          regressionFacilityIds: ["acceptance"],
+          dependencies: [],
+          verificationPlan: ["Run acceptance"],
+          estimatedCost: 99,
+        },
+      }),
+    ).resolves.toMatchObject({
+      accepted: false,
+      reason: "task admission policy rejected proposal",
+    });
+  });
+
+  it("budgets implementation attempts separately from commitments and teams", async () => {
+    const config = fixture();
+    config.goal = {
+      id: "attempt-ledger",
+      statement: "Produce one bounded implementation attempt",
+      success: { minimumEligibleArtifacts: 1 },
+      budget: {
+        maxAgents: 3,
+        maxActions: 30,
+        maxVerificationRuns: 4,
+        maxWrites: 20,
+        maxAttempts: 1,
+      },
+      stop: {
+        successSustainedForCheckpoints: 1,
+        noProgressTicks: 5,
+        checkpointInterval: 1,
+      },
+    };
+    const environment = await RepositoryEnvironment.create(config);
+    environment.config.readOnly = false;
+    for (const id of ["first", "second", "helper"]) environment.createAgent(id);
+    const initial = await environment.observe({ agentId: "first" });
+    const math = initial.nodes.find((node) => node.path === "math.ts")!;
+    const firstEvidence = (
+      await environment.resolve({
+        agentId: "first",
+        action: { type: "INSPECT", nodeId: math.id },
+      })
+    ).evidenceIds;
+    const secondEvidence = (
+      await environment.resolve({
+        agentId: "second",
+        action: { type: "INSPECT", nodeId: math.id },
+      })
+    ).evidenceIds;
+    const firstCommitment = await environment.resolve({
+      agentId: "first",
+      action: {
+        type: "CLAIM_COMMITMENT",
+        taskId: "bug-add",
+        approach: "minimal repair",
+        roleLabel: "implementer",
+        intendedContribution: "Repair addition",
+        exitCondition: "Candidate submitted",
+        leaseTicks: 10,
+      },
+    });
+    await environment.resolve({
+      agentId: "helper",
+      action: {
+        type: "JOIN_COMMITMENT",
+        commitmentId: firstCommitment.targetId!,
+        roleLabel: "review helper",
+        leaseTicks: 10,
+      },
+    });
+    await environment.resolve({
+      agentId: "second",
+      action: {
+        type: "CLAIM_COMMITMENT",
+        taskId: "bug-add",
+        approach: "compatibility repair",
+        roleLabel: "implementer",
+        intendedContribution: "Preserve compatibility",
+        exitCondition: "Candidate submitted",
+        leaseTicks: 10,
+      },
+    });
+    expect(
+      (await environment.observe({ agentId: "first" })).budgets.attempts,
+    ).toBe(1);
+
+    await expect(
+      environment.resolve({
+        agentId: "first",
+        action: {
+          type: "FORMULATE",
+          taskId: "bug-add",
+          evidenceIds: firstEvidence,
+          targets: ["math.ts"],
+          requiredFacilities: ["acceptance"],
+        },
+      }),
+    ).resolves.toMatchObject({ accepted: true });
+    const afterFirst = await environment.observe({ agentId: "first" });
+    expect(afterFirst.attempts).toHaveLength(1);
+    expect(afterFirst.budgets.attempts).toBe(0);
+    expect(
+      afterFirst.societyRecords?.map((record) => record.eventType),
+    ).toEqual(
+      expect.arrayContaining(["commitment-created", "attempt-started"]),
+    );
+
+    await expect(
+      environment.resolve({
+        agentId: "second",
+        action: {
+          type: "FORMULATE",
+          taskId: "bug-add",
+          evidenceIds: secondEvidence,
+          targets: ["math.ts"],
+          requiredFacilities: ["acceptance"],
+        },
+      }),
+    ).resolves.toMatchObject({
+      accepted: false,
+      reason: "attempt budget exhausted",
+    });
   });
 
   it("runs an emergent society from problem discovery through competing verified candidates", async () => {
@@ -701,6 +1060,7 @@ describe("RepositoryEnvironment", () => {
       agentId: "minimalist",
       action: {
         type: "PROPOSE_PROBLEM",
+        goalId: "repair-math",
         statement: "The add function subtracts its second operand",
         evidenceIds: minimalEvidence,
         goalImpact: "The configured acceptance behavior fails",
@@ -721,6 +1081,7 @@ describe("RepositoryEnvironment", () => {
       agentId: "minimalist",
       action: {
         type: "PROPOSE_TASK",
+        goalId: "repair-math",
         problemId: problem.targetId!,
         objective: "Correct add while preserving its exported contract",
         expectedOutcome: "add(2, 1) returns 3",
@@ -907,6 +1268,9 @@ describe("RepositoryEnvironment", () => {
       ]),
     });
     expect(frozen.acceptedArtifacts).toHaveLength(1);
+    expect(frozen.acceptedArtifacts[0]?.taskIds).toEqual(
+      expect.arrayContaining(["bug-add", proposedTask.targetId!, taskId]),
+    );
     expect(evaluation).toMatchObject({
       outcome: "completed",
       hardGatesPassed: true,

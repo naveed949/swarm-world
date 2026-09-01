@@ -58,6 +58,7 @@ export interface RepositoryGoal {
     mandatoryChecksPass?: boolean | undefined;
   };
   budget: {
+    maxAgents?: number | undefined;
     maxActions: number;
     maxVerificationRuns: number;
     maxWrites: number;
@@ -73,6 +74,7 @@ export interface RepositoryGoal {
 
 export interface RepositoryProblem {
   id: string;
+  goalId: string;
   authorAgentId: string;
   statement: string;
   evidenceIds: string[];
@@ -83,6 +85,7 @@ export interface RepositoryProblem {
 }
 
 export interface RepositoryTaskProposal extends RepositoryTask {
+  goalId: string;
   problemId: string;
   authorAgentId: string;
   objective: string;
@@ -116,6 +119,32 @@ export interface RepositoryVerification {
   revision: string;
   facilityPolicyHash: string;
   recommendation: "accept" | "revise" | "reject";
+}
+
+export interface RepositoryAttempt {
+  id: string;
+  commitmentId: string;
+  agentId: string;
+  taskId: string;
+  approach: string;
+  createdAtTick: number;
+  status: "active" | "submitted" | "abandoned" | "expired";
+  artifactId?: string;
+}
+
+export interface RepositorySocietyRecord {
+  sequence: number;
+  tick: number;
+  entityType:
+    | "problem"
+    | "task"
+    | "commitment"
+    | "attempt"
+    | "verification"
+    | "selection";
+  entityId: string;
+  eventType: string;
+  snapshot: unknown;
 }
 
 export interface RepositorySelection {
@@ -170,6 +199,7 @@ export type RepositoryAction =
   | { type: "CLAIM_TASK"; taskId: string }
   | {
       type: "PROPOSE_PROBLEM";
+      goalId: string;
       statement: string;
       evidenceIds: string[];
       goalImpact: string;
@@ -183,6 +213,7 @@ export type RepositoryAction =
     }
   | {
       type: "PROPOSE_TASK";
+      goalId: string;
       problemId: string;
       objective: string;
       expectedOutcome: string;
@@ -299,6 +330,8 @@ export interface RepositoryObservation {
     eligible: boolean;
   }>;
   verifications?: RepositoryVerification[];
+  attempts?: RepositoryAttempt[];
+  societyRecords?: RepositorySocietyRecord[];
   selection?: RepositorySelection;
   taskClaims: Array<{ taskId: string; agentId: string }>;
   messages: Array<{ senderId: string; recipientId: string; text: string }>;
@@ -348,11 +381,15 @@ export interface RepositoryFrozenSnapshot {
   facilityPolicyHash: string;
   traceHash: string;
   acceptedArtifacts: RepositoryArtifact[];
+  facilities: RepositoryFacility[];
   task: RepositoryTask;
   goal?: RepositoryGoal;
   selection?: RepositorySelection;
   problems: RepositoryProblem[];
   taskProposals: RepositoryTaskProposal[];
+  nodePaths: Record<string, string>;
+  attempts: RepositoryAttempt[];
+  societyRecords: RepositorySocietyRecord[];
 }
 
 export interface RepositoryEvaluation {
@@ -405,6 +442,7 @@ export interface RepositoryRecipe {
   id: string;
   ownerId: string;
   taskId: string;
+  attemptId?: string;
   evidenceIds: string[];
   targets: string[];
   requiredFacilities: string[];

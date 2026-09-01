@@ -8,6 +8,7 @@ import {
   RepositoryEnvironment,
   type RepositoryAction,
   type RepositoryEvaluation,
+  type RepositoryGoal,
   type RepositoryObservation,
 } from "./repository-environment.js";
 import type { RepositoryRunConfig } from "./run-config.js";
@@ -54,6 +55,17 @@ export interface RepositoryCoordinationComparison {
     traceHash: string;
     stopReason?: RepositoryRunResult["summary"]["stopReason"];
   }>;
+}
+
+export function checkpointSatisfiesGoal(
+  goal: RepositoryGoal,
+  progress: ReturnType<RepositoryEnvironment["progress"]>,
+  evaluation: RepositoryEvaluation,
+): boolean {
+  return (
+    progress.goalSatisfied &&
+    (goal.success.mandatoryChecksPass !== true || evaluation.hardGatesPassed)
+  );
 }
 
 const waitPlanner: EnvironmentPlanner<RepositoryObservation, RepositoryAction> =
@@ -174,6 +186,7 @@ export async function runRepositoryExperiment(
     RepositoryAction
   > = createRepositoryPlanner(config),
 ): Promise<RepositoryRunResult> {
+  validateSocietyPopulation(config);
   const ids = Array.from(
     { length: config.population },
     (_, index) => `agent_${String(index).padStart(6, "0")}`,
@@ -181,7 +194,15 @@ export async function runRepositoryExperiment(
   const members =
     config.condition === "independent" ||
     config.coordinationModel === "independent-search"
-      ? await Promise.all(ids.map((id) => runMember(config, [id], planner)))
+      ? await Promise.all(
+          ids.map((id, index) =>
+            runMember(
+              independentMemberConfig(config, index, ids.length),
+              [id],
+              planner,
+            ),
+          ),
+        )
       : [await runMember(config, ids, planner)];
   const evaluation = envelope(members.map((member) => member.evaluation));
   const winningMember =
@@ -274,6 +295,57 @@ export async function runRepositoryExperiment(
   return { summary, tracePath, summaryPath, patchPath, mailboxPath };
 }
 
+function validateSocietyPopulation(config: RepositoryRunConfig): void {
+  const goal = config.environment.goal;
+  if (!goal) return;
+  const maxAgents = goal.budget.maxAgents ?? 5;
+  if (config.population > maxAgents)
+    throw new Error("Repository population exceeds the goal maxAgents budget");
+  const model =
+    config.coordinationModel ??
+    (config.condition === "independent"
+      ? "independent-search"
+      : "emergent-society");
+  if (model !== "independent-search" && config.population < 3)
+    throw new Error("Repository societies require three to five agents");
+}
+
+function partitionBudget(
+  total: number,
+  index: number,
+  members: number,
+): number {
+  return Math.floor(total / members) + (index < total % members ? 1 : 0);
+}
+
+function independentMemberConfig(
+  config: RepositoryRunConfig,
+  index: number,
+  members: number,
+): RepositoryRunConfig {
+  const member = structuredClone(config);
+  const goal = member.environment.goal;
+  if (!goal) return member;
+  const source = config.environment.goal!.budget;
+  goal.budget = {
+    ...goal.budget,
+    maxActions: partitionBudget(source.maxActions, index, members),
+    maxVerificationRuns: partitionBudget(
+      source.maxVerificationRuns,
+      index,
+      members,
+    ),
+    maxWrites: partitionBudget(source.maxWrites, index, members),
+    maxAttempts: partitionBudget(source.maxAttempts, index, members),
+    ...(source.maxModelCalls !== undefined
+      ? {
+          maxModelCalls: partitionBudget(source.maxModelCalls, index, members),
+        }
+      : {}),
+  };
+  return member;
+}
+
 export async function runRepositoryCoordinationComparison(
   baseConfig: RepositoryRunConfig,
   outputDir = "runs",
@@ -343,6 +415,9 @@ async function runMember(
     {
       macroturnInterval: config.macroturnInterval,
       planLimit: config.planLimit,
+      ...(config.environment.goal?.budget.maxModelCalls !== undefined
+        ? { maxModelCalls: config.environment.goal.budget.maxModelCalls }
+        : {}),
     },
     planner,
   );
@@ -377,13 +452,18 @@ async function runMember(
     if (goal && simulator.tick % goal.stop.checkpointInterval === 0) {
       const checkpoint = await simulator.freeze();
       const checkpointEvaluation = await simulator.evaluate(checkpoint);
+      const goalSatisfied = checkpointSatisfiesGoal(
+        goal,
+        progress,
+        checkpointEvaluation,
+      );
       checkpoints.push({
         tick: simulator.tick,
         candidateCommit: checkpoint.candidateCommit,
         outcome: checkpointEvaluation.outcome,
-        goalSatisfied: progress.goalSatisfied,
+        goalSatisfied,
       });
-      sustainedSuccess = progress.goalSatisfied ? sustainedSuccess + 1 : 0;
+      sustainedSuccess = goalSatisfied ? sustainedSuccess + 1 : 0;
       if (sustainedSuccess >= goal.stop.successSustainedForCheckpoints) {
         stopReason = "goal-satisfied";
         break;

@@ -26,6 +26,7 @@ const actionSchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("PROPOSE_PROBLEM"),
+      goalId: z.string().min(1),
       statement: z.string().min(1).max(5_000),
       evidenceIds: z.array(z.string()).min(1).max(64),
       goalImpact: z.string().min(1).max(2_000),
@@ -49,6 +50,7 @@ const actionSchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("PROPOSE_TASK"),
+      goalId: z.string().min(1),
       problemId: z.string(),
       objective: z.string().min(1).max(2_000),
       expectedOutcome: z.string().min(1).max(2_000),
@@ -247,8 +249,11 @@ export function repositoryPlanJsonSchema(
         missingFacilityIds?: string[];
       }
     | undefined;
-  if (!phase?.requiredActionTypes) return schema;
-  const allowed = new Set(["WAIT", ...phase.requiredActionTypes]);
+  const explicitlyAllowed = context.allowedActionTypes as string[] | undefined;
+  if (!explicitlyAllowed && !phase?.requiredActionTypes) return schema;
+  const allowed = new Set(
+    explicitlyAllowed ?? ["WAIT", ...(phase?.requiredActionTypes ?? [])],
+  );
   items.oneOf = variants
     .filter((variant) => {
       const fields = variant.properties as JsonSchema;
@@ -258,11 +263,11 @@ export function repositoryPlanJsonSchema(
     .flatMap((variant) => {
       const fields = variant.properties as JsonSchema;
       const type = (fields.type as JsonSchema).const;
-      if (phase.recipeId && "recipeId" in fields)
+      if (phase?.recipeId && "recipeId" in fields)
         fields.recipeId = { type: "string", const: phase.recipeId };
       if (
         (type === "EDIT" || type === "EDIT_REPLACE") &&
-        phase.targetContentHashes
+        phase?.targetContentHashes
       )
         return Object.entries(phase.targetContentHashes).map(
           ([path, contentHash]) => {
@@ -276,7 +281,7 @@ export function repositoryPlanJsonSchema(
             return targetVariant;
           },
         );
-      if (type === "RUN_CHECK" && phase.missingFacilityIds?.length)
+      if (type === "RUN_CHECK" && phase?.missingFacilityIds?.length)
         fields.facilityId = {
           type: "string",
           enum: phase.missingFacilityIds,
@@ -459,6 +464,7 @@ export function createPiRepositoryPlanner(
     : createPiModelRequest(config),
 ): EnvironmentPlanner<RepositoryObservation, RepositoryAction> {
   return {
+    modelBacked: true,
     plan: async ({ agentId, tick, observation }) => {
       const coordinationModel =
         config.coordinationModel ??
@@ -487,10 +493,33 @@ export function createPiRepositoryPlanner(
         observation.ownedRecipeIds.length || observation.ownedArtifactIds.length
           ? activeWorkPhase(observation)
           : undefined;
+      const allowedActionTypes = observation.affordances.filter((type) => {
+        if (
+          plannerPhase &&
+          !plannerPhase.requiredActionTypes.includes(type) &&
+          type !== "WAIT"
+        )
+          return false;
+        if (!commitment && COMMITMENT_ACTIONS.has(type)) return false;
+        if (
+          coordinationModel === "fixed-workflow" &&
+          agentId !== "agent_000000" &&
+          !REVIEW_ACTIONS.has(type)
+        )
+          return false;
+        if (
+          coordinationModel === "central-supervisor" &&
+          agentId === "agent_000000" &&
+          !SUPERVISOR_ACTIONS.has(type)
+        )
+          return false;
+        return true;
+      });
       const context = {
         role,
         tick,
         ...(plannerPhase ? { plannerPhase } : {}),
+        allowedActionTypes,
         task: config.environment.task,
         patchPolicy: config.environment.patch,
         configuredFacilities: config.environment.facilities.map((facility) => ({

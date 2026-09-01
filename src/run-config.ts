@@ -130,6 +130,7 @@ const repositoryRunSchema = z
             mandatoryChecksPass: z.boolean().optional(),
           }),
           budget: z.object({
+            maxAgents: z.number().int().min(1).max(5).default(5),
             maxActions: z.number().int().positive(),
             maxVerificationRuns: z.number().int().positive(),
             maxWrites: z.number().int().positive(),
@@ -155,6 +156,26 @@ const repositoryRunSchema = z
     }),
   })
   .superRefine((config, context) => {
+    if (config.environment.goal) {
+      const maxAgents = config.environment.goal.budget.maxAgents;
+      if (config.population > maxAgents)
+        context.addIssue({
+          code: "custom",
+          message: "Repository population exceeds the goal maxAgents budget",
+          path: ["population"],
+        });
+      const model =
+        config.coordinationModel ??
+        (config.condition === "independent"
+          ? "independent-search"
+          : "emergent-society");
+      if (model !== "independent-search" && config.population < 3)
+        context.addIssue({
+          code: "custom",
+          message: "Repository societies require three to five agents",
+          path: ["population"],
+        });
+    }
     if (config.planner === "pi" && !config.model)
       context.addIssue({
         code: "custom",

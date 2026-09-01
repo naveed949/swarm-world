@@ -134,6 +134,41 @@ describe("Pi repository planner", () => {
     );
   });
 
+  it("removes treatment- and role-disabled actions from the model schema", async () => {
+    let exposedTypes: string[] = [];
+    const request: RepositoryPlanRequest = async (input) => {
+      const schema = repositoryPlanJsonSchema(input.context) as {
+        properties: {
+          actions: {
+            items: {
+              oneOf: Array<{ properties: { type: { const: string } } }>;
+            };
+          };
+        };
+      };
+      exposedTypes = schema.properties.actions.items.oneOf.map(
+        (variant) => variant.properties.type.const,
+      );
+      return { actions: [{ type: "WAIT" }] };
+    };
+    const planner = createPiRepositoryPlanner(
+      {
+        ...config,
+        condition: "no-explicit-culture",
+        coordinationModel: "fixed-workflow",
+      },
+      request,
+    );
+
+    await planner.plan({
+      agentId: "agent_000001",
+      tick: 2,
+      observation: { ...observation, affordances: ["WAIT", "INSPECT"] },
+    });
+
+    expect(exposedTypes).toEqual(["WAIT", "INSPECT"]);
+  });
+
   it("fails closed when an uncommitted agent proposes a write", async () => {
     const request: RepositoryPlanRequest = async () => ({
       actions: [

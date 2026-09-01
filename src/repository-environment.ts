@@ -23,10 +23,15 @@ import { capabilities } from "./config.js";
 import type { Environment, EnvironmentResolution } from "./environment.js";
 import { sha256 } from "./hash.js";
 import { RepositoryTrace } from "./repository-trace.js";
+import {
+  rankRepositoryCandidates,
+  RepositorySocietyLedger,
+} from "./repository-society.js";
 import type {
   RepositoryAction,
   RepositoryAgent,
   RepositoryArtifact,
+  RepositoryAttempt,
   RepositoryCommitment,
   RepositoryEdge,
   RepositoryEdgeType,
@@ -55,6 +60,7 @@ export type {
   RepositoryEvaluation,
   RepositoryFacility,
   RepositoryFrozenSnapshot,
+  RepositoryGoal,
   RepositoryNode,
   RepositoryNodeType,
   RepositoryObservation,
@@ -78,6 +84,24 @@ function unique<T>(items: T[]): T[] {
   return [...new Set(items)];
 }
 
+function sameMembers(left: string[], right: string[]): boolean {
+  const leftSorted = [...left].sort();
+  const rightSorted = [...right].sort();
+  return (
+    leftSorted.length === rightSorted.length &&
+    leftSorted.every((value, index) => value === rightSorted[index])
+  );
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === "object") {
+    Object.freeze(value);
+    for (const child of Object.values(value as Record<string, unknown>))
+      deepFreeze(child);
+  }
+  return value;
+}
+
 export class RepositoryEnvironment implements Environment<
   RepositoryObservation,
   RepositoryAction,
@@ -88,6 +112,8 @@ export class RepositoryEnvironment implements Environment<
   private readonly evidence = new Map<string, Evidence>();
   private readonly recipes = new Map<string, Recipe>();
   private readonly artifacts = new Map<string, RepositoryArtifact>();
+  private readonly attempts = new Map<string, RepositoryAttempt>();
+  private readonly society = new RepositorySocietyLedger();
   private readonly problems = new Map<string, RepositoryProblem>();
   private readonly taskProposals = new Map<string, RepositoryTaskProposal>();
   private readonly commitments = new Map<string, RepositoryCommitment>();
@@ -126,8 +152,10 @@ export class RepositoryEnvironment implements Environment<
   static async create(
     config: RepositoryEnvironmentConfig,
   ): Promise<RepositoryEnvironment> {
-    const root = await realpath(config.root);
-    const readOnly = config.readOnly ?? true;
+    const authoritativeConfig = structuredClone(config);
+    if (authoritativeConfig.goal) deepFreeze(authoritativeConfig.goal);
+    const root = await realpath(authoritativeConfig.root);
+    const readOnly = authoritativeConfig.readOnly ?? true;
     if (!readOnly) {
       const dockerBoundary =
         process.platform === "linux" &&
@@ -151,13 +179,23 @@ export class RepositoryEnvironment implements Environment<
     const baseCommit = (
       await run(
         "git",
-        ["-C", root, "rev-parse", "--verify", `${config.baseCommit}^{commit}`],
+        [
+          "-C",
+          root,
+          "rev-parse",
+          "--verify",
+          `${authoritativeConfig.baseCommit}^{commit}`,
+        ],
         {
           encoding: "utf8",
         },
       )
     ).stdout.trim();
-    const environment = new RepositoryEnvironment(config, root, baseCommit);
+    const environment = new RepositoryEnvironment(
+      authoritativeConfig,
+      root,
+      baseCommit,
+    );
     await environment.validateConfiguration();
     await environment.buildGraph();
     if (!readOnly) {
@@ -176,7 +214,7 @@ export class RepositoryEnvironment implements Environment<
     environment.record("environment_created", true, undefined, baseCommit, {
       rootHash: sha256(root),
       baseCommit,
-      readOnly: config.readOnly ?? true,
+      readOnly: authoritativeConfig.readOnly ?? true,
       graphHash: environment.graphHash(),
       facilityPolicyHash: environment.facilityPolicyHash(),
     });
@@ -427,6 +465,10 @@ export class RepositoryEnvironment implements Environment<
           a.id.localeCompare(b.id),
         ),
       ),
+      attempts: structuredClone(
+        [...this.attempts.values()].sort((a, b) => a.id.localeCompare(b.id)),
+      ),
+      societyRecords: this.society.snapshot(),
       ...(this.selection ? { selection: structuredClone(this.selection) } : {}),
       affordances: this.affordances(),
       budgets: {
@@ -451,7 +493,7 @@ export class RepositoryEnvironment implements Environment<
               ),
               attempts: Math.max(
                 0,
-                this.config.goal.budget.maxAttempts - this.commitments.size,
+                this.config.goal.budget.maxAttempts - this.attempts.size,
               ),
             }
           : {}),
@@ -747,7 +789,33 @@ export class RepositoryEnvironment implements Environment<
         commitment.status === "active" &&
         commitment.leaseExpiresAtTick <= this.tick
       ) {
-        commitment.status = "expired";
+        const expired = { ...commitment, status: "expired" as const };
+        this.commitments.set(commitment.id, expired);
+        this.society.append(
+          this.tick,
+          "commitment",
+          expired.id,
+          "commitment-expired",
+          expired,
+        );
+        for (const attempt of this.attempts.values())
+          if (
+            attempt.commitmentId === commitment.id &&
+            attempt.status === "active"
+          ) {
+            const expiredAttempt = {
+              ...attempt,
+              status: "expired" as const,
+            };
+            this.attempts.set(attempt.id, expiredAttempt);
+            this.society.append(
+              this.tick,
+              "attempt",
+              attempt.id,
+              "attempt-expired",
+              expiredAttempt,
+            );
+          }
         this.record(
           "commitment_expired",
           true,
@@ -810,7 +878,7 @@ export class RepositoryEnvironment implements Environment<
   }
 
   async freeze(): Promise<RepositoryFrozenSnapshot> {
-    return {
+    return deepFreeze({
       candidateCommit: this.candidateCommit,
       baseCommit: this.baseCommit,
       graphHash: this.graphHash(),
@@ -821,12 +889,20 @@ export class RepositoryEnvironment implements Environment<
           .filter((artifact) => this.integratedArtifactIds.has(artifact.id))
           .sort((a, b) => a.id.localeCompare(b.id)),
       ),
+      facilities: structuredClone(this.config.facilities),
       task: structuredClone(this.config.task),
       ...(this.config.goal ? { goal: structuredClone(this.config.goal) } : {}),
       ...(this.selection ? { selection: structuredClone(this.selection) } : {}),
       problems: structuredClone([...this.problems.values()]),
       taskProposals: structuredClone([...this.taskProposals.values()]),
-    };
+      nodePaths: Object.fromEntries(
+        [...this.nodes.values()].flatMap((node) =>
+          node.path ? [[node.id, node.path]] : [],
+        ),
+      ),
+      attempts: structuredClone([...this.attempts.values()]),
+      societyRecords: this.society.snapshot(),
+    });
   }
 
   async evaluate(
@@ -845,7 +921,7 @@ export class RepositoryEnvironment implements Environment<
       frozen.candidateCommit,
     ]);
     try {
-      for (const facility of this.config.facilities) {
+      for (const facility of frozen.facilities) {
         const result = await this.executeFacility(facility, checkout);
         checks.push({
           facilityId: facility.id,
@@ -870,7 +946,7 @@ export class RepositoryEnvironment implements Environment<
         checkout,
       ]).catch(() => undefined);
     }
-    const mandatory = this.config.facilities.filter(
+    const mandatory = frozen.facilities.filter(
       (facility) => facility.mandatory,
     );
     const hardGatesPassed = mandatory.every(
@@ -881,7 +957,7 @@ export class RepositoryEnvironment implements Environment<
       frozen.acceptedArtifacts.length > 0 &&
       frozen.candidateCommit !== frozen.baseCommit;
     const score = (categories: RepositoryFacility["category"][]) => {
-      const selected = this.config.facilities.filter((facility) =>
+      const selected = frozen.facilities.filter((facility) =>
         categories.includes(facility.category),
       );
       return selected.length
@@ -895,18 +971,14 @@ export class RepositoryEnvironment implements Environment<
       ids.filter(
         (id) => checks.find((check) => check.facilityId === id)?.success,
       ).length / ids.length;
-    const evaluatedTasks = unique(
-      frozen.acceptedArtifacts.flatMap((artifact) => artifact.taskIds),
-    )
-      .map((taskId) => this.taskById(taskId))
-      .filter((task): task is RepositoryTask => task !== undefined);
-    if (!evaluatedTasks.length) evaluatedTasks.push(frozen.task);
-    const correctness = gateScore(
-      unique(evaluatedTasks.flatMap((task) => task.acceptanceFacilityIds)),
-    );
-    const regressionSafety = gateScore(
-      unique(evaluatedTasks.flatMap((task) => task.regressionFacilityIds)),
-    );
+    const frozenTaskById = (taskId: string): RepositoryTask | undefined =>
+      taskId === frozen.task.id
+        ? frozen.task
+        : frozen.taskProposals.find((task) => task.id === taskId);
+    // Only the operator-authored root task controls evaluation. Agent-authored
+    // subtasks may narrow execution, but cannot select easier scoring gates.
+    const correctness = gateScore(frozen.task.acceptanceFacilityIds);
+    const regressionSafety = gateScore(frozen.task.regressionFacilityIds);
     const maintainability = score([
       "format",
       "build",
@@ -914,18 +986,18 @@ export class RepositoryEnvironment implements Environment<
       "lint",
       "analysis",
     ]);
-    const hidden = this.config.facilities.filter(
+    const hidden = frozen.facilities.filter(
       (facility) => facility.category === "hidden",
     );
     const robustness = hidden.length ? score(["hidden"]) : 1;
     const issueCoverage = hasArtifact
       ? frozen.acceptedArtifacts.some((artifact) =>
           artifact.taskIds.some((taskId) => {
-            const task = this.taskById(taskId);
+            const task = frozenTaskById(taskId);
             return (
               task !== undefined &&
               artifact.touchedNodes.some((nodeId) => {
-                const path = this.nodes.get(nodeId)?.path;
+                const path = frozen.nodePaths[nodeId];
                 return path ? task.relevantPaths.includes(path) : false;
               })
             );
@@ -1247,20 +1319,23 @@ export class RepositoryEnvironment implements Environment<
         action.type,
         "recipe cites unavailable task or evidence",
       );
-    if (
-      this.config.goal &&
-      ![...this.commitments.values()].some(
-        (commitment) =>
-          commitment.agentId === agent.id &&
-          commitment.taskId === action.taskId &&
-          commitment.status === "active",
-      )
-    )
+    const commitment = [...this.commitments.values()].find(
+      (candidate) =>
+        candidate.agentId === agent.id &&
+        candidate.taskId === action.taskId &&
+        candidate.status === "active",
+    );
+    if (this.config.goal && !commitment)
       return this.reject(
         agent.id,
         action.type,
         "an active task commitment is required",
       );
+    if (
+      this.config.goal &&
+      this.attempts.size >= this.config.goal.budget.maxAttempts
+    )
+      return this.reject(agent.id, action.type, "attempt budget exhausted");
     if (
       action.targets.some((path) => !this.permitted(path)) ||
       action.targets.some((path) => !task.relevantPaths.includes(path)) ||
@@ -1302,10 +1377,37 @@ export class RepositoryEnvironment implements Environment<
       worktree,
       this.candidateCommit,
     ]);
+    const attemptData = commitment
+      ? {
+          commitmentId: commitment.id,
+          agentId: agent.id,
+          taskId: action.taskId,
+          approach: commitment.approach,
+          createdAtTick: this.tick,
+        }
+      : undefined;
+    const attempt: RepositoryAttempt | undefined = attemptData
+      ? {
+          id: `attempt_${sha256(attemptData).slice(0, 20)}`,
+          ...attemptData,
+          status: "active",
+        }
+      : undefined;
+    if (attempt) {
+      this.attempts.set(attempt.id, attempt);
+      this.society.append(
+        this.tick,
+        "attempt",
+        attempt.id,
+        "attempt-started",
+        attempt,
+      );
+    }
     this.recipes.set(id, {
       id,
       ownerId: agent.id,
       taskId: action.taskId,
+      ...(attempt ? { attemptId: attempt.id } : {}),
       evidenceIds: [...action.evidenceIds],
       targets: unique(action.targets).sort(),
       requiredFacilities: unique(action.requiredFacilities).sort(),
@@ -1594,7 +1696,7 @@ export class RepositoryEnvironment implements Environment<
         .sort(),
       authorId: agent.id,
       contributors: [agent.id],
-      taskIds: [recipe.taskId],
+      taskIds: this.taskLineage(recipe.taskId),
       touchedNodes,
       patchHash: recipe.patchHash,
       evidenceIds,
@@ -1618,8 +1720,35 @@ export class RepositoryEnvironment implements Environment<
         commitment.agentId === agent.id &&
         commitment.taskId === recipe.taskId &&
         commitment.status === "active"
-      )
-        commitment.status = "completed";
+      ) {
+        const completed = { ...commitment, status: "completed" as const };
+        this.commitments.set(commitment.id, completed);
+        this.society.append(
+          this.tick,
+          "commitment",
+          commitment.id,
+          "commitment-completed",
+          completed,
+        );
+      }
+    if (recipe.attemptId) {
+      const attempt = this.attempts.get(recipe.attemptId);
+      if (attempt) {
+        const submitted = {
+          ...attempt,
+          status: "submitted" as const,
+          artifactId: artifact.id,
+        };
+        this.attempts.set(attempt.id, submitted);
+        this.society.append(
+          this.tick,
+          "attempt",
+          attempt.id,
+          "attempt-submitted",
+          submitted,
+        );
+      }
+    }
     const node = this.node(
       "accepted_artifact",
       artifact.id,
@@ -1643,21 +1772,42 @@ export class RepositoryEnvironment implements Environment<
     return proposal?.status === "admitted" ? proposal : undefined;
   }
 
+  private taskLineage(taskId: string, seen = new Set<string>()): string[] {
+    if (seen.has(taskId)) return [];
+    seen.add(taskId);
+    if (taskId === this.config.task.id) return [taskId];
+    const proposal = this.taskProposals.get(taskId);
+    if (!proposal) return [taskId];
+    return unique([
+      taskId,
+      ...proposal.dependencies.flatMap((dependency) =>
+        this.taskLineage(dependency, seen),
+      ),
+    ]).sort();
+  }
+
   private proposeProblem(
     agent: RepositoryAgent,
     action: Extract<RepositoryAction, { type: "PROPOSE_PROBLEM" }>,
   ): EnvironmentResolution {
-    if (!this.owns(agent, action.evidenceIds) || !action.statement.trim())
+    if (!this.config.goal || action.goalId !== this.config.goal.id)
+      return this.reject(agent.id, action.type, "problem is off-goal");
+    if (
+      !this.owns(agent, action.evidenceIds) ||
+      !action.statement.trim() ||
+      !action.goalImpact.trim()
+    )
       return this.reject(
         agent.id,
         action.type,
         "problem requires owned evidence",
       );
-    const id = `problem_${sha256({ statement: action.statement, evidenceIds: [...action.evidenceIds].sort() }).slice(0, 20)}`;
+    const id = `problem_${sha256({ goalId: action.goalId, statement: action.statement, evidenceIds: [...action.evidenceIds].sort() }).slice(0, 20)}`;
     if (this.problems.has(id))
       return this.reject(agent.id, action.type, "duplicate problem");
     const problem: RepositoryProblem = {
       id,
+      goalId: action.goalId,
       authorAgentId: agent.id,
       statement: action.statement,
       evidenceIds: [...action.evidenceIds],
@@ -1667,6 +1817,7 @@ export class RepositoryEnvironment implements Environment<
       challenges: [],
     };
     this.problems.set(id, problem);
+    this.society.append(this.tick, "problem", id, "problem-proposed", problem);
     const node = this.node("problem", id, action.statement.slice(0, 120));
     this.edge(this.taskNodeId(), node.id, "task_relevance");
     return this.accept(agent.id, action.type, id, action.evidenceIds);
@@ -1690,9 +1841,21 @@ export class RepositoryEnvironment implements Environment<
         "CONFIRM_PROBLEM",
         "confirmation requires owned evidence",
       );
-    if (!problem.confirmations.includes(agent.id))
-      problem.confirmations.push(agent.id);
-    problem.status = "confirmed";
+    const confirmed = {
+      ...problem,
+      confirmations: problem.confirmations.includes(agent.id)
+        ? [...problem.confirmations]
+        : [...problem.confirmations, agent.id],
+      status: "confirmed" as const,
+    };
+    this.problems.set(problemId, confirmed);
+    this.society.append(
+      this.tick,
+      "problem",
+      problemId,
+      "problem-confirmed",
+      confirmed,
+    );
     return this.accept(agent.id, "CONFIRM_PROBLEM", problemId, evidenceIds);
   }
 
@@ -1707,12 +1870,26 @@ export class RepositoryEnvironment implements Environment<
         action.type,
         "challenge requires a problem and owned evidence",
       );
-    problem.challenges.push({
-      agentId: agent.id,
-      evidenceIds: [...action.evidenceIds],
-      reason: action.reason,
-    });
-    problem.status = "challenged";
+    const challenged = {
+      ...problem,
+      challenges: [
+        ...problem.challenges,
+        {
+          agentId: agent.id,
+          evidenceIds: [...action.evidenceIds],
+          reason: action.reason,
+        },
+      ],
+      status: "challenged" as const,
+    };
+    this.problems.set(problem.id, challenged);
+    this.society.append(
+      this.tick,
+      "problem",
+      problem.id,
+      "problem-challenged",
+      challenged,
+    );
     return this.accept(agent.id, action.type, problem.id, action.evidenceIds);
   }
 
@@ -1724,7 +1901,22 @@ export class RepositoryEnvironment implements Environment<
     const facilities = new Set(
       this.config.facilities.map((facility) => facility.id),
     );
-    if (!problem || problem.status !== "confirmed")
+    const requiredVerificationRuns = new Set([
+      ...this.config.task.acceptanceFacilityIds,
+      ...this.config.task.regressionFacilityIds,
+      ...this.config.facilities
+        .filter(
+          (facility) => facility.mandatory && facility.category !== "hidden",
+        )
+        .map((facility) => facility.id),
+    ]).size;
+    if (
+      !this.config.goal ||
+      action.goalId !== this.config.goal.id ||
+      !problem ||
+      problem.goalId !== action.goalId ||
+      problem.status !== "confirmed"
+    )
       return this.reject(
         agent.id,
         action.type,
@@ -1732,12 +1924,35 @@ export class RepositoryEnvironment implements Environment<
       );
     if (
       !action.relevantPaths.length ||
+      !action.objective.trim() ||
+      !action.expectedOutcome.trim() ||
       !action.acceptanceCriteria.length ||
       !action.acceptanceFacilityIds.length ||
       !action.regressionFacilityIds.length ||
       !action.verificationPlan.length ||
       action.estimatedCost < 1 ||
+      action.estimatedCost > agent.writesRemaining ||
+      action.estimatedCost >
+        this.config.goal.budget.maxActions - this.actionsUsed ||
+      action.estimatedCost >
+        this.config.goal.budget.maxWrites - this.writesUsed ||
+      this.attempts.size >= this.config.goal.budget.maxAttempts ||
+      requiredVerificationRuns >
+        this.config.goal.budget.maxVerificationRuns -
+          this.verificationRunsUsed ||
       action.relevantPaths.some((path) => !this.permitted(path)) ||
+      action.relevantPaths.some(
+        (path) => !this.config.task.relevantPaths.includes(path),
+      ) ||
+      !sameMembers(
+        action.acceptanceFacilityIds,
+        this.config.task.acceptanceFacilityIds,
+      ) ||
+      !sameMembers(
+        action.regressionFacilityIds,
+        this.config.task.regressionFacilityIds,
+      ) ||
+      action.dependencies.some((id) => !this.taskById(id)) ||
       [...action.acceptanceFacilityIds, ...action.regressionFacilityIds].some(
         (id) => !facilities.has(id),
       ) ||
@@ -1772,6 +1987,7 @@ export class RepositoryEnvironment implements Environment<
     const id = `task_${fingerprint.slice(0, 20)}`;
     const task: RepositoryTaskProposal = {
       id,
+      goalId: action.goalId,
       problemId: problem.id,
       authorAgentId: agent.id,
       title: action.objective,
@@ -1781,13 +1997,17 @@ export class RepositoryEnvironment implements Environment<
       acceptanceFacilityIds: [...action.acceptanceFacilityIds],
       regressionFacilityIds: [...action.regressionFacilityIds],
       relevantPaths: unique(action.relevantPaths).sort(),
-      dependencies: [...action.dependencies],
+      dependencies: unique([
+        this.config.task.id,
+        ...action.dependencies,
+      ]).sort(),
       verificationPlan: [...action.verificationPlan],
       estimatedCost: action.estimatedCost,
       priority: this.taskProposals.size + 1,
       status: "admitted",
     };
     this.taskProposals.set(id, task);
+    this.society.append(this.tick, "task", id, "task-admitted", task);
     const node = this.node("task_proposal", id, task.title);
     this.edge(
       this.nodeIdForStableKey("problem", problem.id),
@@ -1822,6 +2042,7 @@ export class RepositoryEnvironment implements Environment<
     if (!this.problems.has(problemId))
       this.problems.set(problemId, {
         id: problemId,
+        goalId: this.config.goal?.id ?? `legacy-${parent.id}`,
         authorAgentId: "operator",
         statement: parent.title,
         evidenceIds: [],
@@ -1832,6 +2053,7 @@ export class RepositoryEnvironment implements Environment<
       });
     return this.proposeTask(agent, {
       type: "PROPOSE_TASK",
+      goalId: this.config.goal?.id ?? `legacy-${parent.id}`,
       problemId,
       objective: action.objective,
       expectedOutcome: action.objective,
@@ -1887,9 +2109,6 @@ export class RepositoryEnvironment implements Environment<
       )
     )
       return this.reject(agent.id, actionType, "duplicate active approach");
-    const maxAttempts = this.config.goal?.budget.maxAttempts;
-    if (maxAttempts !== undefined && this.commitments.size >= maxAttempts)
-      return this.reject(agent.id, actionType, "attempt budget exhausted");
     const data = {
       agentId: agent.id,
       taskId: action.taskId,
@@ -1906,6 +2125,13 @@ export class RepositoryEnvironment implements Environment<
       status: "active",
     };
     this.commitments.set(commitment.id, commitment);
+    this.society.append(
+      this.tick,
+      "commitment",
+      commitment.id,
+      "commitment-created",
+      commitment,
+    );
     const node = this.node("commitment", commitment.id, commitment.roleLabel);
     this.edge(this.taskNodeFor(commitment.taskId), node.id, "ownership");
     return this.accept(agent.id, actionType, commitment.id);
@@ -1947,7 +2173,27 @@ export class RepositoryEnvironment implements Environment<
         "RELEASE_COMMITMENT",
         "commitment unavailable",
       );
-    commitment.status = "released";
+    const released = { ...commitment, status: "released" as const };
+    this.commitments.set(id, released);
+    this.society.append(
+      this.tick,
+      "commitment",
+      id,
+      "commitment-released",
+      released,
+    );
+    for (const attempt of this.attempts.values())
+      if (attempt.commitmentId === id && attempt.status === "active") {
+        const abandoned = { ...attempt, status: "abandoned" as const };
+        this.attempts.set(attempt.id, abandoned);
+        this.society.append(
+          this.tick,
+          "attempt",
+          attempt.id,
+          "attempt-abandoned",
+          abandoned,
+        );
+      }
     return this.accept(agent.id, "RELEASE_COMMITMENT", id);
   }
 
@@ -2003,9 +2249,16 @@ export class RepositoryEnvironment implements Environment<
       checkout,
       artifact.commit,
     ]);
-    let result: Awaited<ReturnType<RepositoryEnvironment["executeFacility"]>>;
+    let completed: Awaited<
+      ReturnType<RepositoryEnvironment["executeIndependentVerification"]>
+    >;
     try {
-      result = await this.executeFacility(facility, checkout);
+      completed = await this.executeIndependentVerification(
+        artifact,
+        facility,
+        agent.id,
+        checkout,
+      );
     } finally {
       await run("git", [
         "-C",
@@ -2016,51 +2269,17 @@ export class RepositoryEnvironment implements Environment<
         checkout,
       ]).catch(() => undefined);
     }
-    const verificationData = {
-      artifactId,
-      verifierAgentId: agent.id,
-      facilityId,
-      success: result.success,
-      outputDigest: result.outputDigest,
-      revision: artifact.commit,
-      facilityPolicyHash: this.facilityPolicyHash(),
-      recommendation: result.success
-        ? ("accept" as const)
-        : ("revise" as const),
-    };
-    const verification: RepositoryVerification = {
-      id: `verification_${sha256(verificationData).slice(0, 24)}`,
-      ...verificationData,
-    };
-    this.verifications.set(verification.id, verification);
-    const evidence = this.makeEvidence(
-      agent.id,
-      "independent_verification",
-      artifact.commit,
-      { ...verificationData, output: result.output },
-      result.outputDigest,
-    );
-    this.trace.appendFacilityCompleted(agent.id, evidence.id, {
-      facilityId,
-      success: result.success,
-      exitCode: result.exitCode,
-      outputDigest: result.outputDigest,
-      output: result.output,
-    });
-    const node = this.node(
-      "verification",
-      verification.id,
-      `${facilityId}: ${verification.recommendation}`,
-    );
-    this.edge(artifact.id, node.id, "test_relation");
-    if (this.artifactEligible(artifact)) artifact.status = "eligible";
-    return result.success
-      ? this.accept(agent.id, "VERIFY_ARTIFACT", verification.id, [evidence.id])
+    if (this.artifactEligible(artifact))
+      this.artifacts.set(artifact.id, { ...artifact, status: "eligible" });
+    return completed.result.success
+      ? this.accept(agent.id, "VERIFY_ARTIFACT", completed.verification.id, [
+          completed.evidenceId!,
+        ])
       : this.reject(
           agent.id,
           "VERIFY_ARTIFACT",
           "independent verification failed",
-          [evidence.id],
+          [completed.evidenceId!],
         );
   }
 
@@ -2086,51 +2305,11 @@ export class RepositoryEnvironment implements Environment<
     try {
       for (const facility of facilities) {
         this.verificationRunsUsed++;
-        const result = await this.executeFacility(facility, checkout);
-        const data = {
-          artifactId: artifact.id,
-          verifierAgentId: "environment-verifier",
-          facilityId: facility.id,
-          success: result.success,
-          outputDigest: result.outputDigest,
-          revision: artifact.commit,
-          facilityPolicyHash: this.facilityPolicyHash(),
-          recommendation: result.success
-            ? ("accept" as const)
-            : ("revise" as const),
-        };
-        const verification: RepositoryVerification = {
-          id: `verification_${sha256(data).slice(0, 24)}`,
-          ...data,
-        };
-        this.verifications.set(verification.id, verification);
-        this.trace.appendFacilityCompleted(
+        await this.executeIndependentVerification(
+          artifact,
+          facility,
           "environment-verifier",
-          verification.id,
-          {
-            facilityId: facility.id,
-            success: result.success,
-            exitCode: result.exitCode,
-            outputDigest: result.outputDigest,
-            output: result.output,
-          },
-        );
-        const node = this.node(
-          "verification",
-          verification.id,
-          `${facility.id}: ${verification.recommendation}`,
-        );
-        this.edge(artifact.id, node.id, "test_relation");
-        this.record(
-          "engine_verification",
-          result.success,
-          "environment-verifier",
-          verification.id,
-          {
-            artifactId: artifact.id,
-            facilityId: facility.id,
-            outputDigest: result.outputDigest,
-          },
+          checkout,
         );
       }
     } finally {
@@ -2143,7 +2322,88 @@ export class RepositoryEnvironment implements Environment<
         checkout,
       ]).catch(() => undefined);
     }
-    if (this.artifactEligible(artifact)) artifact.status = "eligible";
+    if (this.artifactEligible(artifact))
+      this.artifacts.set(artifact.id, { ...artifact, status: "eligible" });
+  }
+
+  private async executeIndependentVerification(
+    artifact: RepositoryArtifact,
+    facility: RepositoryFacility,
+    verifierAgentId: string,
+    checkout: string,
+  ): Promise<{
+    result: Awaited<ReturnType<RepositoryEnvironment["executeFacility"]>>;
+    verification: RepositoryVerification;
+    evidenceId?: string;
+  }> {
+    const result = await this.executeFacility(facility, checkout);
+    const data = {
+      artifactId: artifact.id,
+      verifierAgentId,
+      facilityId: facility.id,
+      success: result.success,
+      outputDigest: result.outputDigest,
+      revision: artifact.commit,
+      facilityPolicyHash: this.facilityPolicyHash(),
+      recommendation: result.success
+        ? ("accept" as const)
+        : ("revise" as const),
+    };
+    const verification: RepositoryVerification = {
+      id: `verification_${sha256(data).slice(0, 24)}`,
+      ...data,
+    };
+    this.verifications.set(verification.id, verification);
+    this.society.append(
+      this.tick,
+      "verification",
+      verification.id,
+      "verification-completed",
+      verification,
+    );
+    const evidence = this.agents.has(verifierAgentId)
+      ? this.makeEvidence(
+          verifierAgentId,
+          "independent_verification",
+          artifact.commit,
+          { ...data, output: result.output },
+          result.outputDigest,
+        )
+      : undefined;
+    this.trace.appendFacilityCompleted(
+      verifierAgentId,
+      evidence?.id ?? verification.id,
+      {
+        facilityId: facility.id,
+        success: result.success,
+        exitCode: result.exitCode,
+        outputDigest: result.outputDigest,
+        output: result.output,
+      },
+    );
+    const node = this.node(
+      "verification",
+      verification.id,
+      `${facility.id}: ${verification.recommendation}`,
+    );
+    this.edge(artifact.id, node.id, "test_relation");
+    if (!evidence)
+      this.record(
+        "engine_verification",
+        result.success,
+        verifierAgentId,
+        verification.id,
+        {
+          artifactId: artifact.id,
+          facilityId: facility.id,
+          outputDigest: result.outputDigest,
+        },
+      );
+    return {
+      result,
+      verification,
+      ...(evidence ? { evidenceId: evidence.id } : {}),
+    };
   }
 
   private challengeVerification(
@@ -2163,6 +2423,16 @@ export class RepositoryEnvironment implements Environment<
       this.verificationChallenges.get(action.verificationId) ?? [];
     challenges.push(`${agent.id}: ${action.reason}`);
     this.verificationChallenges.set(action.verificationId, challenges);
+    this.society.append(
+      this.tick,
+      "verification",
+      action.verificationId,
+      "verification-challenged",
+      {
+        verification: this.verifications.get(action.verificationId),
+        challenges: [...challenges],
+      },
+    );
     return this.accept(
       agent.id,
       action.type,
@@ -2234,25 +2504,15 @@ export class RepositoryEnvironment implements Environment<
   private selectCandidate(
     candidates: RepositoryArtifact[],
   ): RepositoryArtifact {
-    const scored = candidates.map((artifact) => ({
-      artifact,
-      passedFacilities: new Set(
-        this.artifactVerifications(artifact.id)
-          .filter((verification) => verification.success)
-          .map((verification) => verification.facilityId),
-      ).size,
-      recommendations:
-        this.candidateRecommendations.get(artifact.id)?.size ?? 0,
-      taskCoverage: artifact.taskIds.length,
-      changedLines: artifact.changedLines ?? Number.MAX_SAFE_INTEGER,
-    }));
-    scored.sort(
-      (a, b) =>
-        b.passedFacilities - a.passedFacilities ||
-        b.recommendations - a.recommendations ||
-        b.taskCoverage - a.taskCoverage ||
-        a.changedLines - b.changedLines ||
-        a.artifact.id.localeCompare(b.artifact.id),
+    const scored = rankRepositoryCandidates(
+      candidates,
+      (artifactId) =>
+        new Set(
+          this.artifactVerifications(artifactId)
+            .filter((verification) => verification.success)
+            .map((verification) => verification.facilityId),
+        ).size,
+      (artifactId) => this.candidateRecommendations.get(artifactId)?.size ?? 0,
     );
     const winner = scored[0]!;
     const data = {
@@ -2269,6 +2529,13 @@ export class RepositoryEnvironment implements Environment<
       },
     };
     this.selection = { id: `selection_${sha256(data).slice(0, 24)}`, ...data };
+    this.society.append(
+      this.tick,
+      "selection",
+      this.selection.id,
+      "candidate-selected",
+      this.selection,
+    );
     this.record("candidate_selected", true, undefined, winner.artifact.id, {
       ...this.selection,
     });
@@ -2425,7 +2692,8 @@ export class RepositoryEnvironment implements Environment<
       ...(caps.taskClaims || this.config.condition === "independent"
         ? (["CLAIM_TASK"] as const)
         : []),
-      ...(caps.taskClaims || this.config.condition === "independent"
+      ...(this.config.goal &&
+      (caps.taskClaims || this.config.condition === "independent")
         ? ([
             "PROPOSE_PROBLEM",
             "CONFIRM_PROBLEM",
