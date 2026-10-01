@@ -1,4 +1,6 @@
 dist
 coverage
-runs
+runs/*
+!runs/portfolio/
+!runs/portfolio/**
 package-lock.json

@@ -219,6 +219,34 @@ Every shared run writes:
 
 Tests cover fixed-seed generation, nested spawns, deterministic simulation, treatment enforcement, VM limits, content identity, flux conservation, and agent-free evaluation. CI runs type checking, linting, tests with coverage, and a production build.
 
+## Portfolio evaluation
+
+`runs/portfolio/` is the checked-in portfolio report path. Other directories under `runs/` stay ignored. A report must match `schemas/portfolio-scored-report.schema.json`.
+
+`runs/portfolio/report.json` is an unscored placeholder. `status` is `unscored`, `aggregates` is null, and `trials` is empty. No mean or standard deviation has been measured. `scored` is reserved for a later multi-seed run that records existing experiment outputs; this scaffold does not contain one.
+
+Soft-PASS is unused. An unscored report is not a pass.
+
+This path does not qualify AdaptiveSandbox. Reports do not include `adaptiveSandboxQualified`.
+
+SwarmWorld paper claims are separate from portfolio evaluation. The published paper's numerical results are not scores from this repository. When a scored report exists, its metrics stay on the current experiment seam: `resilienceAuc`, `serviceAuc`, and `finalCoverage` from agent-free `evaluateFrozen`, plus `discoveryFrontierAuc` and `bestArtifactPerformance` from the run summary. Portfolio evaluation does not add authority-flip or ECE metrics, and it does not reproduce the paper's figures.
+
+### Reproduce commands (stub)
+
+These commands are the existing heuristic entry points. They do not write a scored `runs/portfolio/` report:
+
+```bash
+npm run build
+node dist/cli.js run --config examples/minimal.yaml --output runs
+```
+
+### Honesty non-claims
+
+- Soft-PASS is unused.
+- `adaptiveSandboxQualified` is not a field and is not a result of this path.
+- Paper numerical reproduction is not portfolio evaluation.
+- The placeholder report claims no measured mean±std.
+
 ## Architecture
 
 ```text

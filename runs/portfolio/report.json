@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "status": "unscored",
+  "condition": "full",
+  "cognition": "heuristic",
+  "configPath": "examples/minimal.yaml",
+  "worldSeeds": [],
+  "trialsPerSeed": null,
+  "aggregates": null,
+  "trials": [],
+  "note": "Scaffold only. No multi-seed portfolio run has been recorded, so aggregates are null and trials are empty."
+}

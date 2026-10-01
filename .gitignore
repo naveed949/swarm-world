@@ -1,7 +1,10 @@
 node_modules/
 dist/
 coverage/
-runs/
+# Local experiment output. Portfolio reports under runs/portfolio/ are tracked.
+runs/*
+!runs/portfolio/
+!runs/portfolio/**
 .examples/
 .env
 *.log
