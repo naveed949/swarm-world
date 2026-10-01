@@ -1,0 +1,208 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/naveed949/swarm-world/schemas/portfolio-scored-report.schema.json",
+  "title": "SwarmWorld portfolio scored report",
+  "description": "Checked-in portfolio report for multi-seed SwarmWorld runs. Trial fields match RunSummary and evaluateFrozen outputs: discoveryFrontierAuc, bestArtifactPerformance, and evaluations[] of {seed, resilienceAuc, serviceAuc, finalCoverage}. worldSeed is the experiment seed (the unit of inference). Evaluation seed is the held-out disturbance seed and is not averaged away. A scored report lists each world seed once and sets trialsPerSeed to the number of trials for every listed seed. Aggregates are the mean and standard deviation of those same fields across trials. Null aggregates and an empty trial list mean the values were not measured. This report is not a reproduction of published SwarmWorld paper figures.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "status",
+    "condition",
+    "cognition",
+    "worldSeeds",
+    "trialsPerSeed",
+    "aggregates",
+    "trials"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "status": { "enum": ["unscored", "scored"] },
+    "condition": {
+      "enum": ["full", "no-communication", "no-explicit-culture", "independent"]
+    },
+    "cognition": { "const": "heuristic" },
+    "configPath": { "type": "string", "minLength": 1 },
+    "worldSeeds": {
+      "type": "array",
+      "items": { "type": "integer" },
+      "uniqueItems": true
+    },
+    "trialsPerSeed": {
+      "anyOf": [{ "type": "null" }, { "type": "integer", "minimum": 1 }]
+    },
+    "aggregates": {
+      "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/aggregates" }]
+    },
+    "trials": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/trial" }
+    },
+    "note": { "type": "string" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "status": { "const": "unscored" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "worldSeeds": { "type": "array", "maxItems": 0 },
+          "trialsPerSeed": { "type": "null" },
+          "aggregates": { "type": "null" },
+          "trials": { "type": "array", "maxItems": 0 }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "scored" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "worldSeeds": { "type": "array", "minItems": 3 },
+          "trialsPerSeed": { "type": "integer", "minimum": 1 },
+          "aggregates": { "$ref": "#/$defs/aggregates" },
+          "trials": { "type": "array", "minItems": 1 }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "meanStd": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Mean and standard deviation across trials for one existing evaluation field.",
+      "required": ["mean", "std"],
+      "properties": {
+        "mean": { "type": "number" },
+        "std": { "type": "number", "minimum": 0 }
+      }
+    },
+    "serviceNumbers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["water", "remediation", "stability", "healing", "nutrient"],
+      "properties": {
+        "water": { "type": "number" },
+        "remediation": { "type": "number" },
+        "stability": { "type": "number" },
+        "healing": { "type": "number" },
+        "nutrient": { "type": "number" }
+      }
+    },
+    "serviceMeanStd": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["water", "remediation", "stability", "healing", "nutrient"],
+      "properties": {
+        "water": { "$ref": "#/$defs/meanStd" },
+        "remediation": { "$ref": "#/$defs/meanStd" },
+        "stability": { "$ref": "#/$defs/meanStd" },
+        "healing": { "$ref": "#/$defs/meanStd" },
+        "nutrient": { "$ref": "#/$defs/meanStd" }
+      }
+    },
+    "evaluationResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One evaluateFrozen result. seed is the held-out disturbance seed.",
+      "required": ["seed", "resilienceAuc", "serviceAuc", "finalCoverage"],
+      "properties": {
+        "seed": { "type": "integer" },
+        "resilienceAuc": { "type": "number" },
+        "serviceAuc": { "$ref": "#/$defs/serviceNumbers" },
+        "finalCoverage": { "$ref": "#/$defs/serviceNumbers" }
+      }
+    },
+    "evaluationAggregate": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Mean and standard deviation across trials for one held-out disturbance seed. Disturbance seeds stay separate.",
+      "required": ["seed", "resilienceAuc", "serviceAuc", "finalCoverage"],
+      "properties": {
+        "seed": { "type": "integer" },
+        "resilienceAuc": { "$ref": "#/$defs/meanStd" },
+        "serviceAuc": { "$ref": "#/$defs/serviceMeanStd" },
+        "finalCoverage": { "$ref": "#/$defs/serviceMeanStd" }
+      }
+    },
+    "checkpointEvaluations": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "patternProperties": {
+        "^[0-9]+$": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/evaluationResult" }
+        }
+      }
+    },
+    "checkpointAggregates": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "patternProperties": {
+        "^[0-9]+$": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/evaluationAggregate" }
+        }
+      }
+    },
+    "trial": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One heuristic experiment trial. Metric names match RunSummary and evaluateFrozen.",
+      "required": [
+        "worldSeed",
+        "trial",
+        "runId",
+        "configHash",
+        "traceHash",
+        "events",
+        "artifacts",
+        "programs",
+        "discoveryFrontierAuc",
+        "bestArtifactPerformance",
+        "evaluations"
+      ],
+      "properties": {
+        "worldSeed": { "type": "integer" },
+        "trial": { "type": "integer", "minimum": 0 },
+        "runId": { "type": "string", "minLength": 1 },
+        "configHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "traceHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "events": { "type": "integer", "minimum": 0 },
+        "artifacts": { "type": "integer", "minimum": 0 },
+        "programs": { "type": "integer", "minimum": 0 },
+        "discoveryFrontierAuc": { "type": "number" },
+        "bestArtifactPerformance": { "type": "number" },
+        "evaluations": { "$ref": "#/$defs/checkpointEvaluations" },
+        "validatedInventions": { "type": "integer", "minimum": 0 },
+        "memberTraceHashes": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      }
+    },
+    "aggregates": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Trial-level mean and standard deviation for the same fields a run summary already records. Not paper figures.",
+      "required": [
+        "discoveryFrontierAuc",
+        "bestArtifactPerformance",
+        "evaluations"
+      ],
+      "properties": {
+        "discoveryFrontierAuc": { "$ref": "#/$defs/meanStd" },
+        "bestArtifactPerformance": { "$ref": "#/$defs/meanStd" },
+        "evaluations": { "$ref": "#/$defs/checkpointAggregates" }
+      }
+    }
+  }
+}
