@@ -4,6 +4,11 @@ import { Command } from "commander";
 import { runExperiment } from "./experiment.js";
 import { sha256 } from "./hash.js";
 import {
+  parseTrialsPerSeed,
+  parseWorldSeeds,
+  runPortfolio,
+} from "./portfolio.js";
+import {
   runRepositoryCoordinationComparison,
   runRepositoryExperiment,
 } from "./repository-experiment.js";
@@ -34,6 +39,45 @@ program
     );
     const result = await runExperiment(biofoundry, output);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  });
+
+program
+  .command("portfolio")
+  .description("Score heuristic multi-seed trials and write a portfolio report")
+  .requiredOption("-c, --config <path>", "YAML experiment configuration")
+  .requiredOption("--seeds <list>", "comma-separated world seeds")
+  .requiredOption("--trials <count>", "trials per world seed")
+  .option(
+    "-o, --output <path>",
+    "scored report path",
+    "runs/portfolio/report.json",
+  )
+  .option(
+    "--work <dir>",
+    "ignored directory for experiment traces",
+    "runs/portfolio-work",
+  )
+  .action(async ({ config, seeds, trials, output, work }) => {
+    const report = await runPortfolio({
+      configPath: config,
+      worldSeeds: parseWorldSeeds(String(seeds)),
+      trialsPerSeed: parseTrialsPerSeed(String(trials)),
+      outputPath: output,
+      workDir: work,
+    });
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          output,
+          worldSeeds: report.worldSeeds,
+          trialsPerSeed: report.trialsPerSeed,
+          trials: report.trials.length,
+          aggregates: report.aggregates,
+        },
+        null,
+        2,
+      )}\n`,
+    );
   });
 
 program
