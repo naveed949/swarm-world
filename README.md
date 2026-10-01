@@ -223,29 +223,40 @@ Tests cover fixed-seed generation, nested spawns, deterministic simulation, trea
 
 `runs/portfolio/` is the checked-in portfolio report path. Other directories under `runs/` stay ignored. A report must match `schemas/portfolio-scored-report.schema.json`.
 
-`runs/portfolio/report.json` is an unscored placeholder. `status` is `unscored`, `aggregates` is null, and `trials` is empty. No mean or standard deviation has been measured. `scored` is reserved for a later multi-seed run that records existing experiment outputs; this scaffold does not contain one.
+`runs/portfolio/report.json` is a scored heuristic portfolio: world seeds 3201, 3202, and 3203, with 2 trials each, on `examples/minimal.yaml`. Each trial copies a `runExperiment` summary. `discoveryFrontierAuc` and `bestArtifactPerformance` come from that summary. `resilienceAuc`, `serviceAuc`, and `finalCoverage` come from agent-free `evaluateFrozen`. Evaluation seeds stay separate. Mean and sample standard deviation divide variance by n-1 across all 6 trials.
 
-Soft-PASS is unused. An unscored report is not a pass.
+| Metric                                               | Mean ± std                                 |
+| ---------------------------------------------------- | ------------------------------------------ |
+| `discoveryFrontierAuc`                               | 0.03651240609659548 ± 0.006123467294277672 |
+| `bestArtifactPerformance`                            | 0.0584609887163689 ± 0.006912875084908737  |
+| checkpoint 80, evaluation seed 9201 `resilienceAuc`  | 0 ± 0                                      |
+| checkpoint 80, evaluation seed 9202 `resilienceAuc`  | 0 ± 0                                      |
+| checkpoint 160, evaluation seed 9201 `resilienceAuc` | 0.03958010182947084 ± 0.015144568460768325 |
+| checkpoint 160, evaluation seed 9202 `resilienceAuc` | 0.03958010182947084 ± 0.015144568460768325 |
+
+Checkpoint 80 is 0 ± 0 because `evaluateFrozen` recorded no portfolio service before a program was installed. Service and final-coverage mean±std for every checkpoint are in the report aggregates. Heuristic cognition is deterministic, so the two trials of each world seed match. The standard deviation is the spread of those recorded trials, which is the spread across world seeds entered twice.
+
+When scoring is unavailable, the report stays `unscored` with null aggregates and an empty trial list. That outcome is not a pass. Soft-PASS is unused.
 
 This path does not qualify AdaptiveSandbox. Reports do not include `adaptiveSandboxQualified`.
 
-SwarmWorld paper claims are separate from portfolio evaluation. The published paper's numerical results are not scores from this repository. When a scored report exists, its metrics stay on the current experiment seam: `resilienceAuc`, `serviceAuc`, and `finalCoverage` from agent-free `evaluateFrozen`, plus `discoveryFrontierAuc` and `bestArtifactPerformance` from the run summary. Portfolio evaluation does not add authority-flip or ECE metrics, and it does not reproduce the paper's figures.
+SwarmWorld paper claims are separate from portfolio evaluation. The published paper's numerical results are not scores from this repository. Portfolio metrics stay on the current experiment seam and do not add authority-flip or ECE metrics. This report does not reproduce the paper's figures.
 
-### Reproduce commands (stub)
-
-These commands are the existing heuristic entry points. They do not write a scored `runs/portfolio/` report:
+### Reproduce
 
 ```bash
 npm run build
-node dist/cli.js run --config examples/minimal.yaml --output runs
+node dist/cli.js portfolio --config examples/minimal.yaml --seeds 3201,3202,3203 --trials 2 --output runs/portfolio/report.json
 ```
+
+Experiment traces go to ignored `runs/portfolio-work/`. Only the scored report is checked in. The command uses heuristic cognition and does not need a model provider.
 
 ### Honesty non-claims
 
 - Soft-PASS is unused.
 - `adaptiveSandboxQualified` is not a field and is not a result of this path.
 - Paper numerical reproduction is not portfolio evaluation.
-- The placeholder report claims no measured mean±std.
+- Mean±std above is the sample mean and sample standard deviation of the checked-in trials.
 
 ## Architecture
 
@@ -263,6 +274,7 @@ src/
   engine.ts      macroturn scheduling, action queues, validation, provenance
   evaluation.ts  frozen agent-free stress evaluation
   experiment.ts  shared studies and endpoint-wise isolated envelopes
+  portfolio.ts   checked-in multi-seed scored portfolio reports
   metrics.ts     discovery and portfolio endpoints
   scenario.ts    contained, validated, content-hashed world packages
   trace.ts       canonical immutable event traces

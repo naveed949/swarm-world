@@ -1,12 +1,778 @@
 {
   "schemaVersion": 1,
-  "status": "unscored",
+  "status": "scored",
   "condition": "full",
   "cognition": "heuristic",
   "configPath": "examples/minimal.yaml",
-  "worldSeeds": [],
-  "trialsPerSeed": null,
-  "aggregates": null,
-  "trials": [],
-  "note": "Scaffold only. No multi-seed portfolio run has been recorded, so aggregates are null and trials are empty."
+  "worldSeeds": [3201, 3202, 3203],
+  "trialsPerSeed": 2,
+  "aggregates": {
+    "discoveryFrontierAuc": {
+      "mean": 0.03651240609659548,
+      "std": 0.006123467294277672
+    },
+    "bestArtifactPerformance": {
+      "mean": 0.0584609887163689,
+      "std": 0.006912875084908737
+    },
+    "evaluations": {
+      "80": [
+        {
+          "seed": 9201,
+          "resilienceAuc": {
+            "mean": 0,
+            "std": 0
+          },
+          "serviceAuc": {
+            "water": {
+              "mean": 0,
+              "std": 0
+            },
+            "remediation": {
+              "mean": 0,
+              "std": 0
+            },
+            "stability": {
+              "mean": 0,
+              "std": 0
+            },
+            "healing": {
+              "mean": 0,
+              "std": 0
+            },
+            "nutrient": {
+              "mean": 0,
+              "std": 0
+            }
+          },
+          "finalCoverage": {
+            "water": {
+              "mean": 0,
+              "std": 0
+            },
+            "remediation": {
+              "mean": 0,
+              "std": 0
+            },
+            "stability": {
+              "mean": 0,
+              "std": 0
+            },
+            "healing": {
+              "mean": 0,
+              "std": 0
+            },
+            "nutrient": {
+              "mean": 0,
+              "std": 0
+            }
+          }
+        },
+        {
+          "seed": 9202,
+          "resilienceAuc": {
+            "mean": 0,
+            "std": 0
+          },
+          "serviceAuc": {
+            "water": {
+              "mean": 0,
+              "std": 0
+            },
+            "remediation": {
+              "mean": 0,
+              "std": 0
+            },
+            "stability": {
+              "mean": 0,
+              "std": 0
+            },
+            "healing": {
+              "mean": 0,
+              "std": 0
+            },
+            "nutrient": {
+              "mean": 0,
+              "std": 0
+            }
+          },
+          "finalCoverage": {
+            "water": {
+              "mean": 0,
+              "std": 0
+            },
+            "remediation": {
+              "mean": 0,
+              "std": 0
+            },
+            "stability": {
+              "mean": 0,
+              "std": 0
+            },
+            "healing": {
+              "mean": 0,
+              "std": 0
+            },
+            "nutrient": {
+              "mean": 0,
+              "std": 0
+            }
+          }
+        }
+      ],
+      "160": [
+        {
+          "seed": 9201,
+          "resilienceAuc": {
+            "mean": 0.03958010182947084,
+            "std": 0.015144568460768325
+          },
+          "serviceAuc": {
+            "water": {
+              "mean": 0.15500159978106867,
+              "std": 0.14839363838854816
+            },
+            "remediation": {
+              "mean": 0.001390665068882877,
+              "std": 0.0002651711895439597
+            },
+            "stability": {
+              "mean": 0.23940875344475687,
+              "std": 0.009889952234359073
+            },
+            "healing": {
+              "mean": 0,
+              "std": 0
+            },
+            "nutrient": {
+              "mean": 0,
+              "std": 0
+            }
+          },
+          "finalCoverage": {
+            "water": {
+              "mean": 0.171,
+              "std": 0.1713312580937874
+            },
+            "remediation": {
+              "mean": 0.0010710687908590955,
+              "std": 0.00020771192150023857
+            },
+            "stability": {
+              "mean": 0.20983870232698645,
+              "std": 0.015415612263165663
+            },
+            "healing": {
+              "mean": 0,
+              "std": 0
+            },
+            "nutrient": {
+              "mean": 0,
+              "std": 0
+            }
+          }
+        },
+        {
+          "seed": 9202,
+          "resilienceAuc": {
+            "mean": 0.03958010182947084,
+            "std": 0.015144568460768325
+          },
+          "serviceAuc": {
+            "water": {
+              "mean": 0.15500159978106867,
+              "std": 0.14839363838854816
+            },
+            "remediation": {
+              "mean": 0.001390665068882877,
+              "std": 0.0002651711895439597
+            },
+            "stability": {
+              "mean": 0.23940875344475687,
+              "std": 0.009889952234359073
+            },
+            "healing": {
+              "mean": 0,
+              "std": 0
+            },
+            "nutrient": {
+              "mean": 0,
+              "std": 0
+            }
+          },
+          "finalCoverage": {
+            "water": {
+              "mean": 0.171,
+              "std": 0.1713312580937874
+            },
+            "remediation": {
+              "mean": 0.0010710687908590955,
+              "std": 0.00020771192150023857
+            },
+            "stability": {
+              "mean": 0.20983870232698645,
+              "std": 0.015415612263165663
+            },
+            "healing": {
+              "mean": 0,
+              "std": 0
+            },
+            "nutrient": {
+              "mean": 0,
+              "std": 0
+            }
+          }
+        }
+      ]
+    }
+  },
+  "trials": [
+    {
+      "worldSeed": 3201,
+      "trial": 0,
+      "runId": "full-n8-s3201-26e5220e",
+      "configHash": "26e5220e077b583636351d7516054347fd32015bf0b512c54d81b93165cdf3e0",
+      "traceHash": "88b816fcaf11e74262ced019d7fde59fef98a09ac760ce975dbf277e453c3332",
+      "events": 1524,
+      "artifacts": 6,
+      "programs": 1,
+      "discoveryFrontierAuc": 0.03698237105773533,
+      "bestArtifactPerformance": 0.05529154717018736,
+      "evaluations": {
+        "80": [
+          {
+            "seed": 9201,
+            "resilienceAuc": 0,
+            "serviceAuc": {
+              "water": 0,
+              "remediation": 0,
+              "stability": 0,
+              "healing": 0,
+              "nutrient": 0
+            },
+            "finalCoverage": {
+              "water": 0,
+              "remediation": 0,
+              "stability": 0,
+              "healing": 0,
+              "nutrient": 0
+            }
+          },
+          {
+            "seed": 9202,
+            "resilienceAuc": 0,
+            "serviceAuc": {
+              "water": 0,
+              "remediation": 0,
+              "stability": 0,
+              "healing": 0,
+              "nutrient": 0
+            },
+            "finalCoverage": {
+              "water": 0,
+              "remediation": 0,
+              "stability": 0,
+              "healing": 0,
+              "nutrient": 0
+            }
+          }
+        ],
+        "160": [
+          {
+            "seed": 9201,
+            "resilienceAuc": 0.056922650027800274,
+            "serviceAuc": {
+              "water": 0.3300047993432062,
+              "remediation": 0.0015138351074791539,
+              "stability": 0.2377078658273176,
+              "healing": 0,
+              "nutrient": 0
+            },
+            "finalCoverage": {
+              "water": 0.378,
+              "remediation": 0.0010736197766912188,
+              "stability": 0.20273538936434038,
+              "healing": 0,
+              "nutrient": 0
+            }
+          },
+          {
+            "seed": 9202,
+            "resilienceAuc": 0.056922650027800274,
+            "serviceAuc": {
+              "water": 0.3300047993432062,
+              "remediation": 0.0015138351074791539,
+              "stability": 0.2377078658273176,
+              "healing": 0,
+              "nutrient": 0
+            },
+            "finalCoverage": {
+              "water": 0.378,
+              "remediation": 0.0010736197766912188,
+              "stability": 0.20273538936434038,
+              "healing": 0,
+              "nutrient": 0
+            }
+          }
+        ]
+      },
+      "validatedInventions": 0
+    },
+    {
+      "worldSeed": 3201,
+      "trial": 1,
+      "runId": "full-n8-s3201-26e5220e",
+      "configHash": "26e5220e077b583636351d7516054347fd32015bf0b512c54d81b93165cdf3e0",
+      "traceHash": "88b816fcaf11e74262ced019d7fde59fef98a09ac760ce975dbf277e453c3332",
+      "events": 1524,
+      "artifacts": 6,
+      "programs": 1,
+      "discoveryFrontierAuc": 0.03698237105773533,
+      "bestArtifactPerformance": 0.05529154717018736,
+      "evaluations": {
+        "80": [
+          {
+            "seed": 9201,
+            "resilienceAuc": 0,
+            "serviceAuc": {
+              "water": 0,
+              "remediation": 0,
+              "stability": 0,
+              "healing": 0,
+              "nutrient": 0
+            },
+            "finalCoverage": {
+              "water": 0,
+              "remediation": 0,
+              "stability": 0,
+              "healing": 0,
+              "nutrient": 0
+            }
+          },
+          {
+            "seed": 9202,
+            "resilienceAuc": 0,
+            "serviceAuc": {
+              "water": 0,
+              "remediation": 0,
+              "stability": 0,
+              "healing": 0,
+              "nutrient": 0
+            },
+            "finalCoverage": {
+              "water": 0,
+              "remediation": 0,
+              "stability": 0,
+              "healing": 0,
+              "nutrient": 0
+            }
+          }
+        ],
+        "160": [
+          {
+            "seed": 9201,
+            "resilienceAuc": 0.056922650027800274,
+            "serviceAuc": {
+              "water": 0.3300047993432062,
+              "remediation": 0.0015138351074791539,
+              "stability": 0.2377078658273176,
+              "healing": 0,
+              "nutrient": 0
+            },
+            "finalCoverage": {
+              "water": 0.378,
+              "remediation": 0.0010736197766912188,
+              "stability": 0.20273538936434038,
+              "healing": 0,
+              "nutrient": 0
+            }
+          },
+          {
+            "seed": 9202,
+            "resilienceAuc": 0.056922650027800274,
+            "serviceAuc": {
+              "water": 0.3300047993432062,
+              "remediation": 0.0015138351074791539,
+              "stability": 0.2377078658273176,
+              "healing": 0,
+              "nutrient": 0
+            },
+            "finalCoverage": {
+              "water": 0.378,
+              "remediation": 0.0010736197766912188,
+              "stability": 0.20273538936434038,
+              "healing": 0,
+              "nutrient": 0
+            }
+          }
+        ]
+      },
+      "validatedInventions": 0
+    },
+    {
+      "worldSeed": 3202,
+      "trial": 0,
+      "runId": "full-n8-s3202-5cc2e6f6",
+      "configHash": "5cc2e6f648e80ff13964ad99f451f4bb955c702412662c4e643b341ef4ecd169",
+      "traceHash": "8e9a2fc7ee2c6c5c8b2b9d43c92ba9b2171f03a9b2dedebe7ac4647a1f0d73d7",
+      "events": 1469,
+      "artifacts": 2,
+      "programs": 1,
+      "discoveryFrontierAuc": 0.02944328765516071,
+      "bestArtifactPerformance": 0.05282069858023303,
+      "evaluations": {
+        "80": [
+          {
+            "seed": 9201,
+            "resilienceAuc": 0,
+            "serviceAuc": {
+              "water": 0,
+              "remediation": 0,
+              "stability": 0,
+              "healing": 0,
+              "nutrient": 0
+            },
+            "finalCoverage": {
+              "water": 0,
+              "remediation": 0,
+              "stability": 0,
+              "healing": 0,
+              "nutrient": 0
+            }
+          },
+          {
+            "seed": 9202,
+            "resilienceAuc": 0,
+            "serviceAuc": {
+              "water": 0,
+              "remediation": 0,
+              "stability": 0,
+              "healing": 0,
+              "nutrient": 0
+            },
+            "finalCoverage": {
+              "water": 0,
+              "remediation": 0,
+              "stability": 0,
+              "healing": 0,
+              "nutrient": 0
+            }
+          }
+        ],
+        "160": [
+          {
+            "seed": 9201,
+            "resilienceAuc": 0.02309061445487748,
+            "serviceAuc": {
+              "water": 0,
+              "remediation": 0.0016056963106746138,
+              "stability": 0.22930044823810017,
+              "healing": 0,
+              "nutrient": 0
+            },
+            "finalCoverage": {
+              "water": 0,
+              "remediation": 0.0013020117775481568,
+              "stability": 0.19729040273612225,
+              "healing": 0,
+              "nutrient": 0
+            }
+          },
+          {
+            "seed": 9202,
+            "resilienceAuc": 0.02309061445487748,
+            "serviceAuc": {
+              "water": 0,
+              "remediation": 0.0016056963106746138,
+              "stability": 0.22930044823810017,
+              "healing": 0,
+              "nutrient": 0
+            },
+            "finalCoverage": {
+              "water": 0,
+              "remediation": 0.0013020117775481568,
+              "stability": 0.19729040273612225,
+              "healing": 0,
+              "nutrient": 0
+            }
+          }
+        ]
+      },
+      "validatedInventions": 0
+    },
+    {
+      "worldSeed": 3202,
+      "trial": 1,
+      "runId": "full-n8-s3202-5cc2e6f6",
+      "configHash": "5cc2e6f648e80ff13964ad99f451f4bb955c702412662c4e643b341ef4ecd169",
+      "traceHash": "8e9a2fc7ee2c6c5c8b2b9d43c92ba9b2171f03a9b2dedebe7ac4647a1f0d73d7",
+      "events": 1469,
+      "artifacts": 2,
+      "programs": 1,
+      "discoveryFrontierAuc": 0.02944328765516071,
+      "bestArtifactPerformance": 0.05282069858023303,
+      "evaluations": {
+        "80": [
+          {
+            "seed": 9201,
+            "resilienceAuc": 0,
+            "serviceAuc": {
+              "water": 0,
+              "remediation": 0,
+              "stability": 0,
+              "healing": 0,
+              "nutrient": 0
+            },
+            "finalCoverage": {
+              "water": 0,
+              "remediation": 0,
+              "stability": 0,
+              "healing": 0,
+              "nutrient": 0
+            }
+          },
+          {
+            "seed": 9202,
+            "resilienceAuc": 0,
+            "serviceAuc": {
+              "water": 0,
+              "remediation": 0,
+              "stability": 0,
+              "healing": 0,
+              "nutrient": 0
+            },
+            "finalCoverage": {
+              "water": 0,
+              "remediation": 0,
+              "stability": 0,
+              "healing": 0,
+              "nutrient": 0
+            }
+          }
+        ],
+        "160": [
+          {
+            "seed": 9201,
+            "resilienceAuc": 0.02309061445487748,
+            "serviceAuc": {
+              "water": 0,
+              "remediation": 0.0016056963106746138,
+              "stability": 0.22930044823810017,
+              "healing": 0,
+              "nutrient": 0
+            },
+            "finalCoverage": {
+              "water": 0,
+              "remediation": 0.0013020117775481568,
+              "stability": 0.19729040273612225,
+              "healing": 0,
+              "nutrient": 0
+            }
+          },
+          {
+            "seed": 9202,
+            "resilienceAuc": 0.02309061445487748,
+            "serviceAuc": {
+              "water": 0,
+              "remediation": 0.0016056963106746138,
+              "stability": 0.22930044823810017,
+              "healing": 0,
+              "nutrient": 0
+            },
+            "finalCoverage": {
+              "water": 0,
+              "remediation": 0.0013020117775481568,
+              "stability": 0.19729040273612225,
+              "healing": 0,
+              "nutrient": 0
+            }
+          }
+        ]
+      },
+      "validatedInventions": 0
+    },
+    {
+      "worldSeed": 3203,
+      "trial": 0,
+      "runId": "full-n8-s3203-5bcd394a",
+      "configHash": "5bcd394aa67c98f7c96539b7747f81f59f146ecc1a46e5540a9f38cf066e2396",
+      "traceHash": "91684be3198e71455adda1e4266b7386d7f6b26b5fc42b1ed3f2e85f9ef11dcb",
+      "events": 1656,
+      "artifacts": 5,
+      "programs": 1,
+      "discoveryFrontierAuc": 0.04311155957689039,
+      "bestArtifactPerformance": 0.06727072039868628,
+      "evaluations": {
+        "80": [
+          {
+            "seed": 9201,
+            "resilienceAuc": 0,
+            "serviceAuc": {
+              "water": 0,
+              "remediation": 0,
+              "stability": 0,
+              "healing": 0,
+              "nutrient": 0
+            },
+            "finalCoverage": {
+              "water": 0,
+              "remediation": 0,
+              "stability": 0,
+              "healing": 0,
+              "nutrient": 0
+            }
+          },
+          {
+            "seed": 9202,
+            "resilienceAuc": 0,
+            "serviceAuc": {
+              "water": 0,
+              "remediation": 0,
+              "stability": 0,
+              "healing": 0,
+              "nutrient": 0
+            },
+            "finalCoverage": {
+              "water": 0,
+              "remediation": 0,
+              "stability": 0,
+              "healing": 0,
+              "nutrient": 0
+            }
+          }
+        ],
+        "160": [
+          {
+            "seed": 9201,
+            "resilienceAuc": 0.03872704100573477,
+            "serviceAuc": {
+              "water": 0.13499999999999981,
+              "remediation": 0.0010524637884948634,
+              "stability": 0.2512179462688528,
+              "healing": 0,
+              "nutrient": 0
+            },
+            "finalCoverage": {
+              "water": 0.135,
+              "remediation": 0.0008375748183379112,
+              "stability": 0.22949031488049668,
+              "healing": 0,
+              "nutrient": 0
+            }
+          },
+          {
+            "seed": 9202,
+            "resilienceAuc": 0.03872704100573477,
+            "serviceAuc": {
+              "water": 0.13499999999999981,
+              "remediation": 0.0010524637884948634,
+              "stability": 0.2512179462688528,
+              "healing": 0,
+              "nutrient": 0
+            },
+            "finalCoverage": {
+              "water": 0.135,
+              "remediation": 0.0008375748183379112,
+              "stability": 0.22949031488049668,
+              "healing": 0,
+              "nutrient": 0
+            }
+          }
+        ]
+      },
+      "validatedInventions": 0
+    },
+    {
+      "worldSeed": 3203,
+      "trial": 1,
+      "runId": "full-n8-s3203-5bcd394a",
+      "configHash": "5bcd394aa67c98f7c96539b7747f81f59f146ecc1a46e5540a9f38cf066e2396",
+      "traceHash": "91684be3198e71455adda1e4266b7386d7f6b26b5fc42b1ed3f2e85f9ef11dcb",
+      "events": 1656,
+      "artifacts": 5,
+      "programs": 1,
+      "discoveryFrontierAuc": 0.04311155957689039,
+      "bestArtifactPerformance": 0.06727072039868628,
+      "evaluations": {
+        "80": [
+          {
+            "seed": 9201,
+            "resilienceAuc": 0,
+            "serviceAuc": {
+              "water": 0,
+              "remediation": 0,
+              "stability": 0,
+              "healing": 0,
+              "nutrient": 0
+            },
+            "finalCoverage": {
+              "water": 0,
+              "remediation": 0,
+              "stability": 0,
+              "healing": 0,
+              "nutrient": 0
+            }
+          },
+          {
+            "seed": 9202,
+            "resilienceAuc": 0,
+            "serviceAuc": {
+              "water": 0,
+              "remediation": 0,
+              "stability": 0,
+              "healing": 0,
+              "nutrient": 0
+            },
+            "finalCoverage": {
+              "water": 0,
+              "remediation": 0,
+              "stability": 0,
+              "healing": 0,
+              "nutrient": 0
+            }
+          }
+        ],
+        "160": [
+          {
+            "seed": 9201,
+            "resilienceAuc": 0.03872704100573477,
+            "serviceAuc": {
+              "water": 0.13499999999999981,
+              "remediation": 0.0010524637884948634,
+              "stability": 0.2512179462688528,
+              "healing": 0,
+              "nutrient": 0
+            },
+            "finalCoverage": {
+              "water": 0.135,
+              "remediation": 0.0008375748183379112,
+              "stability": 0.22949031488049668,
+              "healing": 0,
+              "nutrient": 0
+            }
+          },
+          {
+            "seed": 9202,
+            "resilienceAuc": 0.03872704100573477,
+            "serviceAuc": {
+              "water": 0.13499999999999981,
+              "remediation": 0.0010524637884948634,
+              "stability": 0.2512179462688528,
+              "healing": 0,
+              "nutrient": 0
+            },
+            "finalCoverage": {
+              "water": 0.135,
+              "remediation": 0.0008375748183379112,
+              "stability": 0.22949031488049668,
+              "healing": 0,
+              "nutrient": 0
+            }
+          }
+        ]
+      },
+      "validatedInventions": 0
+    }
+  ],
+  "note": "Measured with heuristic cognition. Each trial copies runExperiment fields discoveryFrontierAuc, bestArtifactPerformance, events, artifacts, programs, and evaluateFrozen evaluations. Mean and sample standard deviation use every recorded trial and divide variance by n-1. Evaluation seeds stay separate. Heuristic plans are deterministic, so repeated trials of one world seed match. This report is not a published SwarmWorld paper figure."
 }
